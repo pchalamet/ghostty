@@ -5591,6 +5591,8 @@ const compressPage_tw = tripwire.module(
     error{DecommitFailed},
 );
 
+const CompressionMode = enum { incremental, drain, full };
+
 /// Compress eligible nodes, saving a significant amount of memory.
 ///
 /// Eligible nodes are complete pages before the active boundary which do not
@@ -5614,11 +5616,20 @@ const compressPage_tw = tripwire.module(
 /// that every page was compressed.
 pub fn compress(
     self: *PageList,
-    mode: enum { incremental, drain, full },
+    mode: CompressionMode,
+) IncrementalCompressionResult {
+    return self.compressExcept(mode, null);
+}
+
+/// Like compress, but keep a page resident while the cursor holds cell pointers.
+pub fn compressExcept(
+    self: *PageList,
+    mode: CompressionMode,
+    resident: ?*List.Node,
 ) IncrementalCompressionResult {
     return switch (mode) {
-        .incremental => self.compressIncremental(),
-        .drain => while (true) switch (self.compressIncremental()) {
+        .incremental => self.compressIncremental(resident),
+        .drain => while (true) switch (self.compressIncremental(resident)) {
             .pending => continue,
             .complete => break .complete,
             .unsupported => break .unsupported,
@@ -5631,7 +5642,7 @@ pub fn compress(
                 break :full .unsupported;
             }
 
-            self.compressFull();
+            self.compressFull(resident);
 
             // Full compression has no continuation. Discard any partial
             // incremental cursor so later activity starts at the oldest page.
@@ -5643,7 +5654,7 @@ pub fn compress(
 }
 
 /// Perform one candidate-bounded incremental cold-history compression step.
-fn compressIncremental(self: *PageList) IncrementalCompressionResult {
+fn compressIncremental(self: *PageList, resident: ?*List.Node) IncrementalCompressionResult {
     const state = &self.page_compression;
 
     // If we can't reclaim virtual memory, compression is unsupported.
@@ -5687,7 +5698,7 @@ fn compressIncremental(self: *PageList) IncrementalCompressionResult {
         inspected_pages += 1;
 
         // If this page is already compressed, ignore it.
-        if (node.isCompressed()) continue;
+        if (node == resident or node.isCompressed()) continue;
 
         // Compression is substantially more expensive even if it fails.
         // So we just try it.
@@ -5717,12 +5728,12 @@ fn compressIncremental(self: *PageList) IncrementalCompressionResult {
 }
 
 /// Compress every fully historical resident page which is currently cold.
-fn compressFull(self: *PageList) void {
+fn compressFull(self: *PageList, resident: ?*List.Node) void {
     var it: CompressionIterator = .init(self);
     while (it.next()) |node| {
 
         // Don't restore an already-compressed page just to recompress it.
-        if (node.isCompressed()) continue;
+        if (node == resident or node.isCompressed()) continue;
 
         // Failure leaves this node resident and unchanged.
         _ = self.compressPage(node);

@@ -293,6 +293,7 @@ pub const Options = struct {
     /// standard page and only complete historical pages are pruned.
     max_scrollback_lines: ?usize = null,
 
+    /// Allow relative cursor motion into retained primary-screen rows.
     colors: Colors = .default,
 
     /// The default mode state. When the terminal gets a reset, it
@@ -526,7 +527,9 @@ pub fn gpa(self: *Terminal) Allocator {
 /// intentionally unaffected because it never retains scrollback.
 pub fn setScrollbackMaxBytes(self: *Terminal, max: ?usize) void {
     const primary = self.screens.get(.primary).?;
+    const old_node = primary.cursor.page_pin.node;
     primary.pages.setMaxBytes(max);
+    if (primary.cursor.in_scrollback) primary.cursorReloadAfterPrune(old_node);
     primary.no_scrollback = max == 0;
 
     // Lowering the limit can drop old history, along with any
@@ -542,7 +545,9 @@ pub fn setScrollbackMaxBytes(self: *Terminal, max: ?usize) void {
 /// unaffected because it never retains scrollback.
 pub fn setScrollbackMaxLines(self: *Terminal, max: ?usize) void {
     const primary = self.screens.get(.primary).?;
+    const old_node = primary.cursor.page_pin.node;
     primary.pages.setMaxLines(max);
+    if (primary.cursor.in_scrollback) primary.cursorReloadAfterPrune(old_node);
 
     // Lowering the limit can drop old history, along with any
     // placements attached to it.
@@ -622,6 +627,7 @@ pub fn printSliceAscii(self: *Terminal, bytes: []const u8) !void {
 /// printable ASCII (see printSliceAscii). Cp is comptime so that each
 /// compiles as if the other didn't exist.
 fn printSliceOf(self: *Terminal, comptime Cp: type, cps: []const Cp) !void {
+    self.screens.active.noteScrollbackEdit();
     // Check if we can do the fast path up front. If we can't
     // we need to go back to scalar `print`.
     const fast = fast: {
@@ -1898,6 +1904,7 @@ pub fn print(self: *Terminal, c: u21) !void {
         @branchHint(.cold);
         return;
     }
+    self.screens.active.noteScrollbackEdit();
 
     // After doing any printing, wrapping, scrolling, etc. we want to ensure
     // that our screen remains in a consistent state.
@@ -2337,7 +2344,7 @@ fn writeCell(
                 // wrapped from the previous row, leaving a spacer_head
                 // at the end of that row. Clear it so the previous row
                 // doesn't keep a stale spacer_head.
-                if (self.screens.active.cursor.y > 0 and self.screens.active.cursor.x <= 1) {
+                if (self.screens.active.cursor.x <= 1 and self.cursorHasPreviousRow()) {
                     const head_cell = self.screens.active.cursorCellEndOfPrev();
                     if (head_cell.wide == .spacer_head) head_cell.wide = .narrow;
                 }
@@ -2362,7 +2369,7 @@ fn writeCell(
                 // wrapped from the previous row, leaving a spacer_head
                 // at the end of that row. Clear it so the previous row
                 // doesn't keep a stale spacer_head.
-                if (self.screens.active.cursor.y > 0 and self.screens.active.cursor.x <= 1) {
+                if (self.screens.active.cursor.x <= 1 and self.cursorHasPreviousRow()) {
                     const head_cell = self.screens.active.cursorCellEndOfPrev();
                     if (head_cell.wide == .spacer_head) head_cell.wide = .narrow;
                 }
@@ -2542,7 +2549,20 @@ pub fn backspace(self: *Terminal) void {
 /// 0, adjust it to 1.
 pub fn cursorUp(self: *Terminal, count_req: usize) void {
     // Always resets pending wrap
-    self.screens.active.cursor.pending_wrap = false;
+    const screen = self.screens.active;
+    screen.cursor.pending_wrap = false;
+
+    if (screen.cursor.in_scrollback or
+        (!screen.no_scrollback and
+            self.scrolling_region.top == 0 and !self.modes.get(.origin) and
+            @max(count_req, 1) > screen.cursor.y))
+    {
+        screen.cursorToPin(switch (screen.cursor.page_pin.upOverflow(@max(count_req, 1))) {
+            .offset => |pin| pin,
+            .overflow => |overflow| overflow.end,
+        });
+        return;
+    }
 
     // The maximum amount the cursor can move up depends on scrolling regions
     const max = if (self.screens.active.cursor.y >= self.scrolling_region.top)
@@ -2555,12 +2575,23 @@ pub fn cursorUp(self: *Terminal, count_req: usize) void {
     self.screens.active.cursorUp(@intCast(count));
 }
 
+fn cursorHasPreviousRow(self: *const Terminal) bool {
+    const cursor = &self.screens.active.cursor;
+    return cursor.y > 0 or (cursor.in_scrollback and cursor.page_pin.up(1) != null);
+}
+
 /// Move the cursor down amount lines. If amount is greater than the maximum
 /// move distance then it is internally adjusted to the maximum. This sequence
 /// will not scroll the screen or scroll region. If amount is 0, adjust it to 1.
 pub fn cursorDown(self: *Terminal, count_req: usize) void {
     // Always resets pending wrap
-    self.screens.active.cursor.pending_wrap = false;
+    const screen = self.screens.active;
+    screen.cursor.pending_wrap = false;
+
+    if (screen.cursor.in_scrollback) {
+        self.cursorDownFromScrollback(@max(count_req, 1), self.scrolling_region.bottom);
+        return;
+    }
 
     // The max the cursor can move to depends where the cursor currently is
     const max = if (self.screens.active.cursor.y <= self.scrolling_region.bottom)
@@ -2569,6 +2600,19 @@ pub fn cursorDown(self: *Terminal, count_req: usize) void {
         self.rows - self.screens.active.cursor.y - 1;
     const count = @min(max, @max(count_req, 1));
     self.screens.active.cursorDown(@intCast(count));
+}
+
+fn cursorDownFromScrollback(self: *Terminal, count: usize, bottom: size.CellCountInt) void {
+    const screen = self.screens.active;
+    const dest = switch (screen.cursor.page_pin.downOverflow(count)) {
+        .offset => |pin| pin,
+        .overflow => |overflow| overflow.end,
+    };
+    if (screen.pages.pointFromPin(.active, dest)) |pos| {
+        screen.cursorAbsolute(dest.x, @intCast(@min(pos.active.y, bottom)));
+        return;
+    }
+    screen.cursorToPin(dest);
 }
 
 /// Move the cursor right amount columns. If amount is greater than the
@@ -2604,7 +2648,7 @@ pub fn cursorLeft(self: *Terminal, count_req: usize) void {
     // If we are in no wrap mode, then we move the cursor left and exit
     // since this is the fastest and most typical path. Like cursorRight,
     // we stop at the left margin unless the cursor is already left of it.
-    if (wrap_mode == .none) {
+    if (wrap_mode == .none or self.screens.active.cursor.in_scrollback) {
         const x = self.screens.active.cursor.x;
         const left_margin = if (x < self.scrolling_region.left)
             0
@@ -2701,6 +2745,14 @@ pub fn cursorLeft(self: *Terminal, count_req: usize) void {
 /// is kept per screen (main / alternative). If for the current screen state
 /// was already saved it is overwritten.
 pub fn saveCursor(self: *Terminal) void {
+    const screen = self.screens.active;
+    if (self.screens.active_key == .primary) {
+        if (screen.saved_cursor_pin) |pin| {
+            pin.* = screen.cursor.page_pin.*;
+        } else {
+            screen.saved_cursor_pin = screen.pages.trackPin(screen.cursor.page_pin.*) catch null;
+        }
+    }
     self.screens.active.saved_cursor = .{
         .x = self.screens.active.cursor.x,
         .y = self.screens.active.cursor.y,
@@ -2744,6 +2796,19 @@ pub fn restoreCursor(self: *Terminal) void {
     self.modes.set(.origin, saved.origin);
     self.screens.active.cursor.pending_wrap = saved.pending_wrap;
     self.screens.active.cursor.protected = saved.protected;
+    if (self.screens.active.saved_cursor != null) {
+        if (self.screens.active.saved_cursor_pin) |pin| {
+            if (!pin.garbage) {
+                self.screens.active.cursorToPin(pin.*);
+                return;
+            }
+
+            // The saved row was evicted. Resume at the active screen's home.
+            self.screens.active.cursor.pending_wrap = false;
+            self.screens.active.cursorAbsolute(0, 0);
+            return;
+        }
+    }
     self.screens.active.cursorAbsolute(
         @min(saved.x, self.cols - 1),
         @min(saved.y, self.rows - 1),
@@ -3049,6 +3114,11 @@ pub fn index(self: *Terminal) !void {
         assert(!screen.cursor.semantic_content_clear_eol);
     };
 
+    if (screen.cursor.in_scrollback) {
+        screen.cursorToPin(screen.cursor.page_pin.down(1).?);
+        return;
+    }
+
     // Outside of the scroll region we move the cursor one line down.
     if (screen.cursor.y < self.scrolling_region.top or
         screen.cursor.y > self.scrolling_region.bottom)
@@ -3215,6 +3285,10 @@ fn kittyScrollMarginsBegin(
 ///   * If the cursor is not on the top-most line of the scrolling region:
 ///     move the cursor one line up
 pub fn reverseIndex(self: *Terminal) void {
+    if (self.screens.active.cursor.in_scrollback) {
+        self.cursorUp(1);
+        return;
+    }
     if (self.screens.active.cursor.y != self.scrolling_region.top or
         self.screens.active.cursor.x < self.scrolling_region.left or
         self.screens.active.cursor.x > self.scrolling_region.right)
@@ -3265,7 +3339,7 @@ pub fn setCursorPos(self: *Terminal, row_req: usize, col_req: usize) void {
     const y = @min(params.y_max, row +| params.y_offset) -| 1;
 
     // If the y is unchanged then this is fast pointer math
-    if (y == self.screens.active.cursor.y) {
+    if (!self.screens.active.cursor.in_scrollback and y == self.screens.active.cursor.y) {
         if (x > self.screens.active.cursor.x) {
             self.screens.active.cursorRight(x - self.screens.active.cursor.x);
         } else {
@@ -3301,6 +3375,12 @@ pub fn setCursorRow(self: *Terminal, row: usize) void {
 /// Move the cursor to the given column (1-indexed), keeping its row (CHA
 /// and HPA). In origin mode the column is relative to the left margin.
 pub fn setCursorCol(self: *Terminal, col: usize) void {
+    const screen = self.screens.active;
+    if (screen.cursor.in_scrollback) {
+        screen.cursor.pending_wrap = false;
+        screen.cursorHorizontalAbsolute(@intCast(@min(self.cols, @max(col, 1)) - 1));
+        return;
+    }
     self.setCursorPos(self.cursorPosForSet().row, col);
 }
 
@@ -3308,6 +3388,11 @@ pub fn setCursorCol(self: *Terminal, col: usize) void {
 /// cursorDown, this stops only at the bottom of the screen, or of the
 /// scrolling region in origin mode.
 pub fn cursorRowRelative(self: *Terminal, count: usize) void {
+    if (self.screens.active.cursor.in_scrollback) {
+        self.screens.active.cursor.pending_wrap = false;
+        self.cursorDownFromScrollback(count, self.rows - 1);
+        return;
+    }
     const pos = self.cursorPosForSet();
     self.setCursorPos(pos.row +| count, pos.col);
 }
@@ -3317,7 +3402,7 @@ pub fn cursorRowRelative(self: *Terminal, count: usize) void {
 /// the scrolling region in origin mode.
 pub fn cursorColRelative(self: *Terminal, count: usize) void {
     const pos = self.cursorPosForSet();
-    self.setCursorPos(pos.row, pos.col +| count);
+    self.setCursorCol(pos.col +| count);
 }
 
 /// Set Top and Bottom Margins If bottom is not specified, 0 or bigger than
@@ -3362,9 +3447,18 @@ pub fn scrollDown(self: *Terminal, count: usize) void {
     const old_x = self.screens.active.cursor.x;
     const old_y = self.screens.active.cursor.y;
     const old_wrap = self.screens.active.cursor.pending_wrap;
+    const screen = self.screens.active;
+    const old_history = if (screen.cursor.in_scrollback)
+        screen.pages.trackPin(screen.cursor.page_pin.*) catch |err| {
+            log.warn("cannot preserve scrollback cursor during scroll down err={}", .{err});
+            return;
+        }
+    else
+        null;
+    defer if (old_history) |pin| screen.pages.untrackPin(pin);
     defer {
-        self.screens.active.cursorAbsolute(old_x, old_y);
-        self.screens.active.cursor.pending_wrap = old_wrap;
+        if (old_history) |pin| screen.cursorToPin(pin.*) else screen.cursorAbsolute(old_x, old_y);
+        screen.cursor.pending_wrap = old_wrap;
     }
 
     // If margins are set and kitty image placements exist, they need
@@ -3402,9 +3496,21 @@ pub fn scrollUp(self: *Terminal, count: usize) !void {
     const old_x = self.screens.active.cursor.x;
     const old_y = self.screens.active.cursor.y;
     const old_wrap = self.screens.active.cursor.pending_wrap;
+    const old_history = if (self.screens.active.cursor.in_scrollback)
+        try self.screens.active.pages.trackPin(self.screens.active.cursor.page_pin.*)
+    else
+        null;
+    defer if (old_history) |pin| self.screens.active.pages.untrackPin(pin);
     defer {
-        self.screens.active.cursorAbsolute(old_x, old_y);
-        self.screens.active.cursor.pending_wrap = old_wrap;
+        if (old_history) |pin| {
+            var dest = pin.*;
+            dest.garbage = false;
+            self.screens.active.cursorToPin(dest);
+            self.screens.active.cursor.pending_wrap = old_wrap and !pin.garbage;
+        } else {
+            self.screens.active.cursorAbsolute(old_x, old_y);
+            self.screens.active.cursor.pending_wrap = old_wrap;
+        }
     }
 
     // If margins are set and kitty image placements exist, they need
@@ -3586,10 +3692,12 @@ pub fn compress(
     self: *Terminal,
     mode: CompressionMode,
 ) CompressionResult {
-    const pages = &self.screens.get(.primary).?.pages;
+    const screen = self.screens.get(.primary).?;
+    const pages = &screen.pages;
+    const cursor_node = if (screen.cursor.in_scrollback) screen.cursor.page_pin.node else null;
     const result = switch (mode) {
-        .incremental => pages.compress(.incremental),
-        .full => pages.compress(.full),
+        .incremental => pages.compressExcept(.incremental, cursor_node),
+        .full => pages.compressExcept(.full, cursor_node),
     };
 
     return switch (result) {
@@ -3701,10 +3809,7 @@ pub fn insertLines(self: *Terminal, count: usize) void {
     if (count == 0) return;
 
     // If the cursor is outside the scroll region we do nothing.
-    if (self.screens.active.cursor.y < self.scrolling_region.top or
-        self.screens.active.cursor.y > self.scrolling_region.bottom or
-        self.screens.active.cursor.x < self.scrolling_region.left or
-        self.screens.active.cursor.x > self.scrolling_region.right) return;
+    if (!self.cursorInScrollingRegion()) return;
 
     if (comptime build_options.kitty_graphics) {
         // Scrolling dirties the images because it updates their placements pins.
@@ -3875,10 +3980,7 @@ pub fn deleteLines(self: *Terminal, count: usize) void {
     if (count == 0) return;
 
     // If the cursor is outside the scroll region we do nothing.
-    if (self.screens.active.cursor.y < self.scrolling_region.top or
-        self.screens.active.cursor.y > self.scrolling_region.bottom or
-        self.screens.active.cursor.x < self.scrolling_region.left or
-        self.screens.active.cursor.x > self.scrolling_region.right) return;
+    if (!self.cursorInScrollingRegion()) return;
 
     if (comptime build_options.kitty_graphics) {
         // Scrolling dirties the images because it updates their placements pins.
@@ -4030,6 +4132,7 @@ pub fn deleteLines(self: *Terminal, count: usize) void {
 ///
 /// The inserted cells are colored according to the current SGR state.
 pub fn insertBlanks(self: *Terminal, count: usize) void {
+    self.screens.active.noteScrollbackEdit();
     // Unset pending wrap state without wrapping. Note: this purposely
     // happens BEFORE the scroll region check below, because that's what
     // xterm does.
@@ -4131,6 +4234,7 @@ pub fn insertBlanks(self: *Terminal, count: usize) void {
 ///
 /// Does not change the cursor position.
 pub fn deleteChars(self: *Terminal, count_req: usize) void {
+    self.screens.active.noteScrollbackEdit();
     if (count_req == 0) return;
 
     // If our cursor is outside the margins then do nothing. We DO reset
@@ -4249,6 +4353,7 @@ pub fn forwardIndex(self: *Terminal) void {
     self.screens.active.cursor.pending_wrap = false;
 
     if (self.screens.active.cursor.x == self.scrolling_region.right) {
+        if (self.screens.active.cursor.in_scrollback) return;
         // Scrolling the region left means deleting its left-most column,
         // not the one under the cursor.
         const old_x = self.screens.active.cursor.x;
@@ -4266,13 +4371,15 @@ pub fn forwardIndex(self: *Terminal) void {
 /// the left and right margins.
 fn cursorInScrollingRegion(self: *const Terminal) bool {
     const cursor = &self.screens.active.cursor;
-    return cursor.x >= self.scrolling_region.left and
+    return !cursor.in_scrollback and
+        cursor.x >= self.scrolling_region.left and
         cursor.x <= self.scrolling_region.right and
         cursor.y >= self.scrolling_region.top and
         cursor.y <= self.scrolling_region.bottom;
 }
 
 pub fn eraseChars(self: *Terminal, count_req: usize) void {
+    self.screens.active.noteScrollbackEdit();
     const count = end: {
         const remaining = self.cols - self.screens.active.cursor.x;
         var end = @min(remaining, @max(count_req, 1));
@@ -4329,6 +4436,7 @@ pub fn eraseLine(
     mode: csi.EraseLine,
     protected_req: bool,
 ) void {
+    self.screens.active.noteScrollbackEdit();
     // Get our start/end positions depending on mode.
     const start, const end = switch (mode) {
         .right => right: {
@@ -4547,7 +4655,11 @@ pub fn eraseDisplay(
             self.eraseLine(.right, protected_req);
 
             // All lines below
-            if (self.screens.active.cursor.y + 1 < self.rows) {
+            if (self.screens.active.cursor.in_scrollback) {
+                const screen = self.screens.active;
+                const next = screen.cursor.page_pin.down(1).?;
+                screen.clearRowsIterator(next.pageIterator(.right_down, null), protected);
+            } else if (self.screens.active.cursor.y + 1 < self.rows) {
                 self.screens.active.clearRows(
                     .{ .active = .{ .y = self.screens.active.cursor.y + 1 } },
                     null,
@@ -4564,7 +4676,13 @@ pub fn eraseDisplay(
             self.eraseLine(.left, protected_req);
 
             // All lines above
-            if (self.screens.active.cursor.y > 0) {
+            if (self.screens.active.cursor.in_scrollback) {
+                const screen = self.screens.active;
+                if (screen.cursor.page_pin.up(1)) |prev| {
+                    const top = screen.pages.getTopLeft(.screen);
+                    screen.clearRowsIterator(top.pageIterator(.right_down, prev), protected);
+                }
+            } else if (self.screens.active.cursor.y > 0) {
                 self.screens.active.clearRows(
                     .{ .active = .{ .y = 0 } },
                     .{ .active = .{ .y = self.screens.active.cursor.y - 1 } },
@@ -5948,7 +6066,7 @@ pub fn softReset(self: *Terminal) void {
     screen.charset = .{};
 
     // A saved cursor now restores to the home position with the defaults.
-    screen.saved_cursor = null;
+    screen.clearSavedCursor();
 
     self.status_display = .main;
     self.flags.modify_other_keys_2 = false;
@@ -12234,6 +12352,104 @@ test "Terminal: cursorUp basic" {
         defer testing.allocator.free(str);
         try testing.expectEqualStrings(" X\n\nA", str);
     }
+}
+
+test "Terminal: writable scrollback Terrabuild refresh while scrolled back" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{
+        .rows = 3,
+        .cols = 20,
+    });
+    defer t.deinit(alloc);
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    stream.nextSlice("task 1 old\r\ntask 2 old\r\ntask 3 old\r\n\x1b7");
+    t.scrollViewport(.top);
+    var render_state: @import("render.zig").RenderState = .empty;
+    defer render_state.deinit(alloc);
+    try render_state.update(alloc, &t);
+    stream.nextSlice("\x1b8\x1b[?2026h");
+    stream.nextSlice("\r\x1b[1A\x1b[2Ktask 3 done");
+    stream.nextSlice("\r\x1b[1A\x1b[2Ktask 2 done");
+    stream.nextSlice("\r\x1b[1A\x1b[2Ktask 1 done");
+    try testing.expect(t.screens.active.cursor.in_scrollback);
+    stream.nextSlice("\r\x1b[3B\x1b[?2026l\x1b7");
+
+    try testing.expectEqual(.top, std.meta.activeTag(t.screens.active.pages.viewport));
+    try testing.expectEqual(2, t.screens.active.cursor.y);
+    const contents = try t.plainString(alloc);
+    defer alloc.free(contents);
+    try testing.expectEqualStrings("task 1 done\ntask 2 done\ntask 3 done", contents);
+
+    try render_state.update(alloc, &t);
+    var rendered: std.Io.Writer.Allocating = .init(alloc);
+    defer rendered.deinit();
+    try render_state.string(&rendered.writer, null);
+    try testing.expect(std.mem.startsWith(u8, rendered.written(), "task 1 done"));
+}
+
+test "Terminal: writable scrollback cursor survives resizing and eviction" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{
+        .rows = 3,
+        .cols = 8,
+        .max_scrollback_bytes = null,
+    });
+    defer t.deinit(alloc);
+    try t.printString("old\none\ntwo\nthree\n");
+    t.cursorUp(4);
+    t.saveCursor();
+    try t.resize(alloc, .{ .cols = 9, .rows = 2 });
+    try testing.expect(t.screens.active.cursor.in_scrollback);
+    t.setCursorPos(1, 1);
+    t.restoreCursor();
+    try testing.expect(t.screens.active.cursor.in_scrollback);
+    try t.print('O');
+    t.setScrollbackMaxBytes(0);
+    try testing.expect(!t.screens.active.cursor.in_scrollback);
+    t.restoreCursor();
+    try testing.expectEqual(0, t.screens.active.cursor.y);
+    try testing.expectEqual(0, t.screens.active.cursor.x);
+    try testing.expectEqual(@as(usize, 2), t.screens.active.pages.total_rows);
+}
+
+test "Terminal: writable scrollback crosses compressed pages with a styled cursor" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{
+        .rows = 3,
+        .cols = 20,
+        .max_scrollback_bytes = null,
+    });
+    defer t.deinit(alloc);
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    const screen = t.screens.active;
+    const page_rows: usize = screen.pages.pages.first.?.capacity().rows;
+    stream.nextSlice("old\r\n");
+    for (0..page_rows * 3) |_| try t.linefeed();
+    _ = t.compress(.full);
+
+    stream.nextSlice("\x1b[31m\x1b]8;;https://example.com\x1b\\");
+    t.cursorUp(page_rows * 4);
+    try testing.expect(screen.cursor.in_scrollback);
+    try testing.expect(screen.cursor.page_pin.node == screen.pages.pages.first.?);
+    _ = t.compress(.full);
+    try testing.expectEqual(.resident, screen.cursor.page_pin.node.storage());
+    stream.nextSlice("\x1b[2Knew");
+    try testing.expectEqual('n', screen.pages.getCell(.{ .screen = .{} }).?.cell.codepoint());
+    try testing.expect(screen.cursor.hyperlink_id != 0);
+    try testing.expect(screen.cursor.style_id != 0);
+
+    t.setScrollbackMaxLines(0);
+    try testing.expect(!screen.cursor.page_pin.garbage);
+    try testing.expect(screen.cursor.hyperlink_id != 0);
+    try testing.expect(screen.cursor.style_id != 0);
+    t.cursorDown(page_rows * 4);
+    try testing.expect(!screen.cursor.in_scrollback);
+    try testing.expectEqual(2, screen.cursor.y);
+    try testing.expect(screen.viewportIsBottom());
 }
 
 test "Terminal: cursorUp below top scroll margin" {

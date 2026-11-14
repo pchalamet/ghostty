@@ -273,17 +273,21 @@ pub const TerminalSearch = struct {
             // Remove screens we have that no longer exist or changed.
             var it = self.screens.iterator();
             while (it.next()) |entry| {
-                const remove = !self.screenIsValid(
+                const valid = self.screenIsValid(
                     &t.screens,
                     entry.key,
                     entry.value,
                 );
 
-                if (remove) {
+                if (valid) {
+                    if (entry.value.scrollback_revision == entry.value.screen.scrollback_revision) continue;
+                    entry.value.deinit();
+                    if (entry.key == self.active_key) self.viewport.reset();
+                } else {
                     entry.value.deinitScreenInvalid();
-                    _ = self.screens.remove(entry.key);
-                    _ = self.screen_generations.remove(entry.key);
                 }
+                _ = self.screens.remove(entry.key);
+                _ = self.screen_generations.remove(entry.key);
             }
         }
         {
@@ -522,6 +526,32 @@ test "viewport matches are cached until the next feed" {
     stream.nextSlice("\r\nFizz");
     search.feed(&t, true);
     try testing.expectEqual(3, (try search.viewportMatches()).len);
+}
+
+test "writable scrollback refreshes cached search results" {
+    const alloc = testing.allocator;
+    var t: Terminal = try .init(testing.io, alloc, .{
+        .cols = 10,
+        .rows = 2,
+    });
+    defer t.deinit(alloc);
+    var stream = t.vtStream();
+    defer stream.deinit();
+    stream.nextSlice("Fizz\r\nBuzz\r\nBang");
+    t.scrollViewport(.top);
+
+    var search: TerminalSearch = try .init(alloc, "Fizz");
+    defer search.deinit(&t);
+    search.feed(&t, true);
+    while (search.tick() != .complete) search.feed(&t, false);
+    try testing.expectEqual(1, search.activeScreenSearch().?.matchesLen());
+    try testing.expectEqual(1, (try search.viewportMatches()).len);
+
+    stream.nextSlice("\r\x1b[2A\x1b[2KFuzz");
+    search.feed(&t, false);
+    while (search.tick() != .complete) search.feed(&t, false);
+    try testing.expectEqual(0, search.activeScreenSearch().?.matchesLen());
+    try testing.expectEqual(0, (try search.viewportMatches()).len);
 }
 
 test "select after active screen removal" {

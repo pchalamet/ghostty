@@ -67,6 +67,7 @@ pub const ScreenSearch = struct {
     /// restart the whole search, currently.
     rows: size.CellCountInt,
     cols: size.CellCountInt,
+    scrollback_revision: usize,
 
     pub const SelectedMatch = struct {
         /// Index from the end of the match list (0 = most recent match)
@@ -144,6 +145,7 @@ pub const ScreenSearch = struct {
             .screen = screen,
             .rows = screen.pages.rows,
             .cols = screen.pages.cols,
+            .scrollback_revision = screen.scrollback_revision,
             .active = try .init(alloc, needle_unowned),
             .history = null,
             .state = .active,

@@ -49,11 +49,15 @@ pages: PageList,
 /// we can always have an active screen.
 no_scrollback: bool = false,
 
+/// Revision of retained text for consumers that cache search results.
+scrollback_revision: usize = 0,
+
 /// The current cursor position
 cursor: Cursor,
 
 /// The saved cursor
 saved_cursor: ?SavedCursor = null,
+saved_cursor_pin: ?*Pin = null,
 
 /// The selection for this screen (if any). This MUST be a tracked selection
 /// otherwise the selection will become invalid. Instead of accessing this
@@ -142,9 +146,11 @@ pub const SemanticPrompt = struct {
 
 /// The cursor position and style.
 pub const Cursor = struct {
-    // The x/y position within the active area.
+    // The x/y position within the active area. In scrollback, x is still
+    // the column, y is zero, and page_pin identifies the row.
     x: size.CellCountInt = 0,
     y: size.CellCountInt = 0,
+    in_scrollback: bool = false,
 
     /// The visual style of the cursor. This defaults to block because
     /// it has to default to something, but users of this struct are
@@ -384,12 +390,17 @@ pub fn assertIntegrity(self: *const Screen) void {
         // match then it indicates that the tracked pin moved and we didn't
         // account for it by either calling cursorReload or manually
         // adjusting.
-        const pt: point.Point = self.pages.pointFromPin(
+        const pt = self.pages.pointFromPin(
             .active,
             self.cursor.page_pin.*,
-        ) orelse unreachable;
-        assert(self.cursor.x == pt.active.x);
-        assert(self.cursor.y == pt.active.y);
+        );
+        assert(self.cursor.x == self.cursor.page_pin.x);
+        if (self.cursor.in_scrollback) {
+            assert(pt == null);
+            assert(self.cursor.y == 0);
+        } else {
+            assert(self.cursor.y == pt.?.active.y);
+        }
 
         // The cursor style and hyperlink if non-zero must reference
         // real data in the page the pin is in.
@@ -441,6 +452,7 @@ pub fn memoryUsage(self: *const Screen) MemoryUsage {
 pub fn reset(self: *Screen) void {
     // Reset our pages
     self.pages.reset();
+    self.scrollback_revision +%= 1;
 
     // The above reset preserves tracked pins so we can still use
     // our cursor pin, which should be at the top-left already. The
@@ -480,12 +492,18 @@ pub fn reset(self: *Screen) void {
     }
 
     // Reset our basic state
-    self.saved_cursor = null;
+    self.clearSavedCursor();
     self.charset = .{};
     self.kitty_keyboard = .{};
     self.protected_mode = .off;
     self.semantic_prompt = .disabled;
     self.clearSelection();
+}
+
+pub fn clearSavedCursor(self: *Screen) void {
+    if (self.saved_cursor_pin) |pin| self.pages.untrackPin(pin);
+    self.saved_cursor_pin = null;
+    self.saved_cursor = null;
 }
 
 /// Clone the screen.
@@ -827,8 +845,6 @@ pub inline fn cursorCellLeft(self: *Screen, n: size.CellCountInt) *pagepkg.Cell 
 }
 
 pub fn cursorCellEndOfPrev(self: *Screen) *pagepkg.Cell {
-    assert(self.cursor.y > 0);
-
     var page_pin = self.cursor.page_pin.up(1).?;
     page_pin.x = page_pin.node.cols() - 1;
     const page_rac = page_pin.rowAndCell();
@@ -915,7 +931,9 @@ pub fn cursorAbsolute(self: *Screen, x: size.CellCountInt, y: size.CellCountInt)
     assert(y < self.pages.rows);
     defer self.assertIntegrity();
 
-    var page_pin = if (y < self.cursor.y)
+    var page_pin = if (self.cursor.in_scrollback)
+        self.pages.getTopLeft(.active).down(y).?
+    else if (y < self.cursor.y)
         self.cursor.page_pin.up(self.cursor.y - y).?
     else if (y > self.cursor.y)
         self.cursor.page_pin.down(y - self.cursor.y).?
@@ -924,10 +942,24 @@ pub fn cursorAbsolute(self: *Screen, x: size.CellCountInt, y: size.CellCountInt)
     page_pin.x = x;
     self.cursor.x = x; // Must be set before cursorChangePin
     self.cursor.y = y;
+    self.cursor.in_scrollback = false;
     self.cursorChangePin(page_pin);
     const page_rac = self.cursor.page_pin.rowAndCell();
     self.cursor.page_row = page_rac.row;
     self.cursor.page_cell = page_rac.cell;
+}
+
+/// Move to a row in the retained buffer, independent of the viewport.
+pub fn cursorToPin(self: *Screen, pin: Pin) void {
+    defer self.assertIntegrity();
+    const pt = self.pages.pointFromPin(.active, pin);
+    self.cursor.x = pin.x;
+    self.cursor.y = if (pt) |p| @intCast(p.active.y) else 0;
+    self.cursor.in_scrollback = pt == null;
+    self.cursorChangePin(pin);
+    const rac = self.cursor.page_pin.rowAndCell();
+    self.cursor.page_row = rac.row;
+    self.cursor.page_cell = rac.cell;
 }
 
 /// Reloads the cursor pointer information into the screen. This is expensive
@@ -935,6 +967,17 @@ pub fn cursorAbsolute(self: *Screen, x: size.CellCountInt, y: size.CellCountInt)
 /// in such a way that its difficult to recover otherwise.
 pub fn cursorReload(self: *Screen) void {
     defer self.assertIntegrity();
+
+    if (self.cursor.in_scrollback) {
+        var pin = self.cursor.page_pin.*;
+        if (pin.garbage) self.cursor.pending_wrap = false;
+        pin.garbage = false;
+        const rac = pin.rowAndCell();
+        self.cursor.page_row = rac.row;
+        self.cursor.page_cell = rac.cell;
+        self.cursorToPin(pin);
+        return;
+    }
 
     // Our tracked pin is ALWAYS accurate, so we derive the active
     // point from the pin. If this returns null it means our pin
@@ -1511,6 +1554,7 @@ pub fn cursorCopy(self: *Screen, other: Cursor, opts: struct {
     self.cursor.page_pin = old.page_pin;
     self.cursor.x = old.x;
     self.cursor.y = old.y;
+    self.cursor.in_scrollback = old.in_scrollback;
 
     // Call manual style update in order to clean up our old style, if we have
     // one, and also to load the style from the other cursor, if it had one.
@@ -1640,6 +1684,10 @@ pub inline fn cursorMarkDirty(self: *Screen) void {
     self.cursor.page_row.dirty = true;
 }
 
+pub inline fn noteScrollbackEdit(self: *Screen) void {
+    if (self.cursor.in_scrollback) self.scrollback_revision +%= 1;
+}
+
 /// Reset the cursor row's soft-wrap state and the cursor's pending wrap.
 /// Also handles clearing the spacer head on the cursor row and resetting
 /// the wrap_continuation flag on the next row if necessary.
@@ -1753,26 +1801,27 @@ pub inline fn scrollClear(self: *Screen) !void {
     // hyperlink again on that page. A plain cursorReload isn't enough.
     // cursorDownScroll handles the same situation for a single row.
     const old_node = self.cursor.page_pin.node;
+    defer self.cursorReloadAfterPrune(old_node);
     try self.pages.scrollClear();
-    if (self.cursor.page_pin.node != old_node) {
-        // The page list marks a moved pin as garbage. The pin does point
-        // at a real location, and cursorReload needs to read it to place
-        // the cursor, so we clear the flag.
-        self.cursor.page_pin.garbage = false;
-
-        // The old page has been freed, so nothing can be released from
-        // it. cursorPageReplaced adds the style and hyperlink to the new
-        // page and then reloads the cursor.
-        self.cursorPageReplaced();
-    } else {
-        self.cursorReload();
-    }
 
     if (comptime build_options.kitty_graphics) {
         // No matter what, scrolling marks our image state as dirty since
         // it could move placements. If there are no placements or no images
         // this is still a very cheap operation.
         self.kitty_images.markDirty();
+    }
+}
+
+/// Refresh cursor references after an operation that may discard history.
+pub fn cursorReloadAfterPrune(self: *Screen, old_node: *PageList.List.Node) void {
+    if (self.cursor.page_pin.node != old_node) {
+        if (self.cursor.in_scrollback and self.cursor.page_pin.garbage) {
+            self.cursor.pending_wrap = false;
+        }
+        self.cursor.page_pin.garbage = false;
+        self.cursorPageReplaced();
+    } else {
+        self.cursorReload();
     }
 }
 
@@ -1789,6 +1838,7 @@ pub inline fn eraseHistory(
     bl: ?point.Point,
 ) void {
     defer self.assertIntegrity();
+    const old_node = self.cursor.page_pin.node;
 
     // Placements anchored in the erased rows are removed first, while
     // their pins still identify those rows. Erasing marks those pins as
@@ -1798,7 +1848,7 @@ pub inline fn eraseHistory(
     }
 
     self.pages.eraseHistory(bl);
-    self.cursorReload();
+    self.cursorReloadAfterPrune(old_node);
 
     // Erasing rows shifts the placements below them, so placements may
     // have moved.
@@ -1810,8 +1860,10 @@ pub inline fn eraseActive(
     y: size.CellCountInt,
 ) void {
     defer self.assertIntegrity();
+    const old_node = self.cursor.page_pin.node;
+    const was_in_scrollback = self.cursor.in_scrollback;
     self.pages.eraseActive(y);
-    self.cursorReload();
+    if (was_in_scrollback) self.cursorReloadAfterPrune(old_node) else self.cursorReload();
 
     // Erasing rows removes placements attached to them and shifts the
     // ones below, so placements may have moved.
@@ -1837,13 +1889,17 @@ pub fn clearRows(
     bl: ?point.Point,
     protected: bool,
 ) void {
+    self.clearRowsIterator(self.pages.pageIterator(.right_down, tl, bl), protected);
+}
+
+pub fn clearRowsIterator(self: *Screen, iter: PageList.PageIterator, protected: bool) void {
     defer self.assertIntegrity();
 
     // If the blank cell is the zero cell, a row already marked blank
     // already holds exactly what the clear would write.
     const blank_zero = self.blankCell().isZero();
 
-    var it = self.pages.pageIterator(.right_down, tl, bl);
+    var it = iter;
     while (it.next()) |chunk| {
         const page = chunk.node.page();
         for (chunk.rows()) |*row| {
@@ -2114,6 +2170,7 @@ pub inline fn resize(
     // modify its X/Y for reflow. Do this before changing any state since
     // tracking the pin can fail.
     const saved_cursor_pin: ?*Pin = saved_cursor: {
+        if (self.saved_cursor_pin != null) break :saved_cursor null;
         const sc = self.saved_cursor orelse break :saved_cursor null;
         const pin = self.pages.pin(.{ .active = .{
             .x = sc.x,
@@ -2229,6 +2286,7 @@ pub inline fn resize(
 
     // If our cursor was updated, we do a full reload so all our cursor
     // state is correct.
+    if (!self.no_scrollback) self.cursor.in_scrollback = true;
     self.cursorReload();
 
     // Erasing history marks a cursor pin in the erased rows as garbage, but
@@ -2262,7 +2320,13 @@ pub inline fn resize(
     };
 
     // If we reflowed a saved cursor, update it.
-    if (saved_cursor_pin) |p| {
+    if (self.saved_cursor_pin) |p| {
+        const saved = &self.saved_cursor.?;
+        if (!p.garbage and saved.pending_wrap and p.x != p.node.cols() - 1) {
+            saved.pending_wrap = false;
+            p.x += 1;
+        }
+    } else if (saved_cursor_pin) |p| {
         // This should never fail because a non-null saved_cursor_pin
         // implies a non-null saved_cursor.
         const sc = &self.saved_cursor.?;
