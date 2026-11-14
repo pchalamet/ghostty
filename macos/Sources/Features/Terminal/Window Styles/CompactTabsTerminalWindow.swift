@@ -127,6 +127,7 @@ final class CompactTabsTerminalWindow: TransparentTitlebarTerminalWindow {
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown, event.clickCount == 1,
+           !isInResizeBorder(event.locationInWindow),
            let titlebarView, let tabStrip, !tabStrip.isHidden,
            titlebarView.bounds.contains(titlebarView.convert(event.locationInWindow, from: nil)),
            !tabStrip.containsControl(at: tabStrip.convert(event.locationInWindow, from: nil)),
@@ -168,6 +169,18 @@ final class CompactTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             return
         }
         super.sendEvent(event)
+    }
+
+    private func isInResizeBorder(_ location: NSPoint) -> Bool {
+        guard styleMask.contains(.resizable), !styleMask.contains(.fullScreen) else { return false }
+
+        // AppKit's resize hit area extends inside the frame, overlapping
+        // the titlebar. Let AppKit handle those events before starting a move.
+        let resizeInset: CGFloat = 3
+        let point = convertPoint(toScreen: location)
+        let horizontalInset = min(point.x - frame.minX, frame.maxX - point.x)
+        let verticalInset = min(point.y - frame.minY, frame.maxY - point.y)
+        return min(horizontalInset, verticalInset) < resizeInset
     }
 
     override func addTitlebarAccessoryViewController(_ childViewController: NSTitlebarAccessoryViewController) {
