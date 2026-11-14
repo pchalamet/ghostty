@@ -352,7 +352,7 @@ extension Ghostty {
         }
 
         var macosTitlebarStyle: MacOSTitlebarStyle {
-            let defaultValue = MacOSTitlebarStyle.transparent
+            let defaultValue = MacOSTitlebarStyle.default
             guard let config = self.config else { return defaultValue }
             var v: UnsafePointer<Int8>?
             let key = "macos-titlebar-style"
@@ -914,8 +914,9 @@ extension Ghostty.Config {
     }
 
     enum MacOSTitlebarStyle: String {
-        static let `default` = MacOSTitlebarStyle.transparent
+        static let `default` = MacOSTitlebarStyle.compactTabs
         case native, transparent, tabs, hidden
+        case compactTabs = "compact-tabs"
     }
 
     enum DragHandle: String {

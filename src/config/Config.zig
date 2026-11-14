@@ -598,7 +598,10 @@ language: ?[:0]const u8 = null,
 /// be fixed in a future update:
 ///
 ///   - macOS: titlebar tabs style is not updated when switching themes.
-theme: ?Theme = null,
+theme: ?Theme = if (builtin.target.os.tag == .macos)
+    .{ .light = "Whitby Bay", .dark = "Whitby Bay" }
+else
+    null,
 
 /// Background color for the window.
 /// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
@@ -2003,7 +2006,10 @@ keybind: Keybinds = .{},
 /// left padding to 2 and the right padding to 4. If you want to set both
 /// paddings to the same value, you can use a single value. For example,
 /// `window-padding-x = 2` will set both paddings to 2.
-@"window-padding-x": WindowPadding = .{ .top_left = 2, .bottom_right = 2 },
+@"window-padding-x": WindowPadding = if (builtin.target.os.tag == .macos)
+    .{ .top_left = 10, .bottom_right = 10 }
+else
+    .{ .top_left = 2, .bottom_right = 2 },
 
 /// Vertical window padding. This applies padding between the terminal cells and
 /// the top and bottom window borders. The value is in points, meaning that it
@@ -2022,7 +2028,10 @@ keybind: Keybinds = .{},
 /// top padding to 2 and the bottom padding to 4. If you want to set both
 /// paddings to the same value, you can use a single value. For example,
 /// `window-padding-y = 2` will set both paddings to 2.
-@"window-padding-y": WindowPadding = .{ .top_left = 2, .bottom_right = 2 },
+@"window-padding-y": WindowPadding = if (builtin.target.os.tag == .macos)
+    .{ .top_left = 8, .bottom_right = 8 }
+else
+    .{ .top_left = 2, .bottom_right = 2 },
 
 /// The viewport dimensions are usually not perfectly divisible by the cell
 /// size. In this case, some extra padding on the end of a column and the bottom
@@ -2193,7 +2202,7 @@ keybind: Keybinds = .{},
 ///     and dark themes, light or dark mode follows the system theme. This is
 ///     only supported on Linux builds.
 ///
-/// On macOS, if `macos-titlebar-style` is `tabs` or `transparent`, the window theme will be
+/// On macOS, if `macos-titlebar-style` is `tabs`, `compact-tabs`, or `transparent`, the window theme will be
 /// automatically set based on the luminosity of the terminal background color.
 /// This only applies to terminal windows. This setting will still apply to
 /// non-terminal windows within Ghostty.
@@ -2296,10 +2305,10 @@ keybind: Keybinds = .{},
 /// running, the previous window state will not be restored because Ghostty only
 /// saves state on exit if this is enabled.
 ///
-/// The default value is `default`.
+/// The default value on macOS is `always`.
 ///
 /// This is currently only supported on macOS. This has no effect on Linux.
-@"window-save-state": WindowSaveState = .default,
+@"window-save-state": WindowSaveState = if (builtin.target.os.tag == .macos) .always else .default,
 
 /// Resize the window in discrete increments of the focused surface's cell size.
 /// If this is disabled, surfaces are resized in pixel increments. Currently
@@ -3421,7 +3430,7 @@ keybind: Keybinds = .{},
 @"macos-window-buttons": MacWindowButtons = .visible,
 
 /// The style of the macOS titlebar. Available values are: "native",
-/// "transparent", "tabs", and "hidden".
+/// "transparent", "tabs", "compact-tabs", and "hidden".
 ///
 /// The "native" style uses the native macOS titlebar with zero customization.
 /// The titlebar will match your window theme (see `window-theme`).
@@ -3445,6 +3454,9 @@ keybind: Keybinds = .{},
 /// macOS 14 does not have this issue and any other macOS version has not
 /// been tested.
 ///
+/// The "compact-tabs" style shows left-aligned tabs in the titlebar. Tabs
+/// show a foreground command icon and name alongside the working directory.
+///
 /// The "hidden" style hides the titlebar. Unlike `window-decoration = none`,
 /// however, it does not remove the frame from the window or cause it to have
 /// squared corners. Changing to or from this option at run-time may affect
@@ -3455,12 +3467,10 @@ keybind: Keybinds = .{},
 /// areas of the frame to drag the window. This is a standard macOS behavior
 /// and not something Ghostty enables.
 ///
-/// The default value is "transparent". This is an opinionated choice
-/// but its one I think is the most aesthetically pleasing and works in
-/// most cases.
+/// The default value is "compact-tabs" on macOS.
 ///
 /// Changing this option at runtime only applies to new windows.
-@"macos-titlebar-style": MacTitlebarStyle = .transparent,
+@"macos-titlebar-style": MacTitlebarStyle = if (builtin.target.os.tag == .macos) .@"compact-tabs" else .transparent,
 
 /// Whether the proxy icon in the macOS titlebar is visible. The proxy icon
 /// is the icon that represents the folder of the current working directory.
@@ -4081,6 +4091,12 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
     };
     errdefer result.deinit();
     const alloc = result._arena.?.allocator();
+
+    if (builtin.target.os.tag == .macos) {
+        const family = &result.@"font-family";
+        try family.list.append(alloc, "Menlo");
+        family.overwrite_next = true;
+    }
 
     // Add our default keybindings
     try result.keybind.init(alloc);
@@ -4753,12 +4769,11 @@ fn loadTheme(self: *Config, theme: Theme) !void {
 /// Call this once after you are done setting configuration. This
 /// is idempotent but will waste memory if called multiple times.
 pub fn finalize(self: *Config) !void {
-    const alloc = self._arena.?.allocator();
 
     // We always load the theme first because it may set other fields
     // in our config.
     if (self.theme) |*theme| {
-        try theme.finalize(alloc);
+        try theme.finalize(self._arena.?.allocator());
         const different = !std.mem.eql(u8, theme.light, theme.dark);
 
         // Warning: loadTheme will deinit our existing config and replace
@@ -4776,6 +4791,8 @@ pub fn finalize(self: *Config) !void {
             self._conditional_set.insert(.theme);
         }
     }
+
+    const alloc = self._arena.?.allocator();
 
     // Used for a variety of defaults. See the function docs as well the
     // specific variable use sites for more details.
@@ -9292,6 +9309,7 @@ pub const MacTitlebarStyle = enum {
     native,
     transparent,
     tabs,
+    @"compact-tabs",
     hidden,
 };
 

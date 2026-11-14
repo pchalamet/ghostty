@@ -43,6 +43,119 @@ final class GhosttyTitlebarTabsUITests: GhosttyCustomConfigCase {
     }
 
     @MainActor
+    func testCompactTabsStayVisibleWhenReturningToFirstTab() throws {
+        try updateConfig("macos-titlebar-style = compact-tabs")
+        let app = try ghosttyApplication()
+        app.launch()
+
+        let firstTab = app.buttons["CompactTabSelected"]
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 5))
+        let window = app.windows.firstMatch
+        let terminal = window.groups["Terminal pane"].firstMatch
+        XCTAssertGreaterThanOrEqual(firstTab.frame.minY - window.frame.minY, 4)
+        XCTAssertGreaterThanOrEqual(terminal.frame.minY - firstTab.frame.maxY, 4)
+        app.buttons["New Tab"].click()
+
+        let inactiveTab = app.buttons["CompactTab"]
+        XCTAssertTrue(inactiveTab.waitForExistence(timeout: 5))
+        XCTAssertLessThan(inactiveTab.frame.minX, firstTab.frame.minX)
+        inactiveTab.click()
+
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(inactiveTab.exists)
+        XCTAssertLessThan(firstTab.frame.minX, inactiveTab.frame.minX)
+        XCTAssertEqual(app.tabs.count, 0)
+
+        let screenshot = XCTAttachment(screenshot: window.screenshot())
+        screenshot.name = "Compact titlebar divider"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        window.typeKey("n", modifierFlags: .command)
+        let backgroundWindow = app.windows.element(boundBy: 1)
+        XCTAssertTrue(backgroundWindow.waitForExistence(timeout: 5))
+        let inactiveScreenshot = XCTAttachment(screenshot: backgroundWindow.screenshot())
+        inactiveScreenshot.name = "Inactive compact titlebar"
+        inactiveScreenshot.lifetime = .keepAlways
+        add(inactiveScreenshot)
+    }
+
+    @MainActor
+    func testCompactTitlebarClickReactivatesSelectedTab() throws {
+        try updateConfig("""
+            macos-titlebar-style = compact-tabs
+            window-width = 112
+            cursor-style = block
+            cursor-style-blink = false
+            shell-integration-features = no-cursor
+            """)
+        let app = try ghosttyApplication()
+        app.launch()
+
+        XCTAssertTrue(app.buttons["CompactTabSelected"].waitForExistence(timeout: 5))
+        app.buttons["New Tab"].click()
+
+        XCTAssertTrue(app.buttons["CompactTab"].waitForExistence(timeout: 5))
+        app.typeKey("n", modifierFlags: .command)
+        let window = app.windows.element(boundBy: 1)
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        let inactiveTab = window.buttons["CompactTab"]
+        let titlebarGap = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(.init(dx: inactiveTab.frame.minX - window.frame.minX - 5,
+                              dy: 5))
+
+        XCTAssertFalse(window.buttons["CompactTabClose"].exists)
+        titlebarGap.click()
+
+        XCTAssertEqual(app.state, .runningForeground)
+        let foregroundWindow = app.windows.firstMatch
+        XCTAssertGreaterThan(foregroundWindow.buttons["CompactTabSelected"].frame.minX,
+                             foregroundWindow.buttons["CompactTab"].frame.minX)
+        XCTAssertTrue(foregroundWindow.textViews.firstMatch.debugDescription.contains("Keyboard Focused"))
+        let screenshot = XCTAttachment(screenshot: foregroundWindow.screenshot())
+        screenshot.name = "Terminal cursor after titlebar activation"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.windows.firstMatch.buttons["CompactTabSelected"].hover()
+        XCTAssertTrue(app.buttons["CompactTabClose"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testCompactTabCloseButtonOnHover() throws {
+        try updateConfig("macos-titlebar-style = compact-tabs")
+        let app = try ghosttyApplication()
+        app.launch()
+
+        let selectedTab = app.buttons["CompactTabSelected"]
+        XCTAssertTrue(selectedTab.waitForExistence(timeout: 5))
+        app.buttons["New Tab"].click()
+
+        let inactiveTab = app.buttons["CompactTab"]
+        XCTAssertTrue(inactiveTab.waitForExistence(timeout: 5))
+        let closeButton = app.buttons["CompactTabClose"]
+        app.groups["Terminal pane"].firstMatch.hover()
+        XCTAssertFalse(closeButton.exists)
+
+        inactiveTab.hover()
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 5))
+        XCTAssertLessThan(closeButton.frame.midX, selectedTab.frame.minX)
+        let hoveredScreenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        hoveredScreenshot.name = "Hovered inactive compact tab"
+        hoveredScreenshot.lifetime = .keepAlways
+        add(hoveredScreenshot)
+        closeButton.click()
+        XCTAssertTrue(inactiveTab.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(selectedTab.exists)
+
+        app.buttons["New Tab"].click()
+        XCTAssertTrue(inactiveTab.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(selectedTab.frame.minX, inactiveTab.frame.minX)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(inactiveTab.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(selectedTab.exists)
+    }
+
+    @MainActor
     func testTabsGeometryInFullscreen() throws {
         let app = try ghosttyApplication()
         app.launch()

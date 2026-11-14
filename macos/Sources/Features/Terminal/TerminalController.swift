@@ -7,6 +7,7 @@ import GhosttyKit
 /// A classic, tabbed terminal experience.
 class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Controller {
     override var windowNibName: NSNib.Name? {
+        if let inheritedWindowNibName { return inheritedWindowNibName }
         let defaultValue = "Terminal"
 
         guard let appDelegate = NSApp.delegate as? AppDelegate else { return defaultValue }
@@ -22,6 +23,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         case .native: "Terminal"
         case .hidden: "TerminalHiddenTitlebar"
         case .transparent: "TerminalTransparentTitlebar"
+        case .compactTabs: "TerminalCompactTabs"
         case .tabs:
 #if compiler(>=6.2)
             if #available(macOS 26.0, *) {
@@ -35,6 +37,14 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         return nib
+    }
+
+    private let inheritedWindowNibName: NSNib.Name?
+    private var loadedWindowNibName: NSNib.Name?
+
+    override func loadWindow() {
+        loadedWindowNibName = windowNibName
+        super.loadWindow()
     }
 
     /// This is set to true when we care about frame changes. This is a small optimization since
@@ -64,7 +74,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     init(_ ghostty: Ghostty.App,
          withBaseConfig base: Ghostty.SurfaceConfiguration? = nil,
          withSurfaceTree tree: SplitTree<Ghostty.SurfaceView>? = nil,
-         parent: NSWindow? = nil
+         parent: NSWindow? = nil,
+         inheritingWindowNibName: NSNib.Name? = nil
     ) {
         // The window we manage is not restorable if we've specified a command
         // to execute. We do this because the restored window is meaningless at the
@@ -72,6 +83,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // as the script. We may want to revisit this behavior when we have scrollback
         // restoration.
         self.restorable = (base?.command ?? "") == ""
+        self.inheritedWindowNibName = inheritingWindowNibName
 
         // Setup our initial derived config based on the current app config
         self.derivedConfig = DerivedConfig(ghostty.config)
@@ -442,7 +454,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         // Create a new window and add it to the parent
-        let controller = TerminalController.init(ghostty, withBaseConfig: baseConfig)
+        let controller = TerminalController(
+            ghostty,
+            withBaseConfig: baseConfig,
+            inheritingWindowNibName: parentController.loadedWindowNibName
+        )
         controller.isBackgroundOpaque = parentController.isBackgroundOpaque
         guard let window = controller.window else { return controller }
 

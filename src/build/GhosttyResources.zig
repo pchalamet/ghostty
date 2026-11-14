@@ -107,6 +107,14 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
     }
 
     // Themes
+    if (cfg.target.result.os.tag == .macos) {
+        const install_step = b.addInstallFileWithDir(
+            b.path("dist/macos/themes/Whitby Bay"),
+            .{ .custom = "share" },
+            "ghostty/themes/Whitby Bay",
+        );
+        try steps.append(b.allocator, &install_step.step);
+    }
     if (cfg.emit_themes) {
         if (b.lazyDependency("iterm2_themes", .{})) |upstream| {
             const install_step = b.addInstallDirectory(.{

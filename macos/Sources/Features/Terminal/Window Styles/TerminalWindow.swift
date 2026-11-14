@@ -672,7 +672,7 @@ class TerminalWindow: NSWindow {
             // Native, transparent, and hidden styles use 16pt radius
             // Tabs style uses 20pt radius
             switch config.macosTitlebarStyle {
-            case .tabs:
+            case .tabs, .compactTabs:
                 self.windowCornerRadius = 20
             default:
                 self.windowCornerRadius = 16
