@@ -2192,6 +2192,16 @@ pub const CAPI = struct {
         );
     }
 
+    export fn ghostty_surface_scroll_to_row(surface: *Surface, row: f64) void {
+        surface.core_surface.scrollToFractionalRow(row) catch |err| {
+            log.warn("unable to scroll surface err={}", .{err});
+        };
+    }
+
+    export fn ghostty_surface_scroll_offset(surface: *Surface) f64 {
+        return surface.core_surface.scrollOffset();
+    }
+
     export fn ghostty_surface_mouse_pressure(
         surface: *Surface,
         stage_raw: u32,

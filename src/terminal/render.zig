@@ -1665,8 +1665,8 @@ pub const RenderState = struct {
     /// blank lines. This is fine for our current usage (link search) but
     /// we can adjust this later.
     ///
-    /// Only viewport rows are included, never overscan rows. The `y`
-    /// values in `map` are viewport rows.
+    /// The viewport and any captured rows below it are included. The `y`
+    /// values in `map` are relative to the viewport.
     ///
     /// NOTE: There is a limitation in that wrapped lines before/after
     /// the top/bottom line of the viewport are not included, since
@@ -1679,11 +1679,11 @@ pub const RenderState = struct {
             map: *StringMap,
         },
     ) (Allocator.Error || std.Io.Writer.Error)!void {
-        // This only covers the viewport, never overscan rows.
         const row_slice = self.row_data.slice();
         const vp_start = self.viewportStart();
-        const row_rows = row_slice.items(.raw)[vp_start..][0..self.rows];
-        const row_cells = row_slice.items(.cells)[vp_start..][0..self.rows];
+        const end = self.rowDataRange().end;
+        const row_rows = row_slice.items(.raw)[vp_start..end];
+        const row_cells = row_slice.items(.cells)[vp_start..end];
 
         for (
             0..,
@@ -1736,7 +1736,7 @@ pub const RenderState = struct {
     /// For example, you may want to hold a lock for the duration of the
     /// update and hyperlink lookup to ensure no updates happen in between.
     ///
-    /// Only viewport rows are searched, never overscan rows. Both the
+    /// The viewport and any captured rows below it are searched. Both the
     /// given point and the returned cells use viewport coordinates.
     pub fn linkCells(
         self: *const RenderState,
@@ -1746,22 +1746,23 @@ pub const RenderState = struct {
         var result: CellSet = .empty;
         errdefer result.deinit(alloc);
 
-        // This only covers the viewport, never overscan rows.
         const row_slice = self.row_data.slice();
         const vp_start = self.viewportStart();
-        const row_pins = row_slice.items(.pin)[vp_start..][0..self.rows];
-        const row_cells = row_slice.items(.cells)[vp_start..][0..self.rows];
+        const end = self.rowDataRange().end;
+        const row_pins = row_slice.items(.pin)[vp_start..end];
+        const row_cells = row_slice.items(.cells)[vp_start..end];
 
         // Our viewport point is sent in by the caller and can't be trusted.
         // If it is outside the valid area then just return empty because
         // we can't possibly have a link there.
         if (viewport_point.x >= self.cols or
-            viewport_point.y >= self.rows) return result;
+            viewport_point.y >= row_pins.len) return result;
 
         // Grab our link ID
         const link_pin: PageList.Pin = row_pins[viewport_point.y];
         const link_page: *page.Page = link_pin.node.page();
         const link = link: {
+            if (viewport_point.x >= link_pin.node.cols()) return result;
             const rac = link_page.getRowAndCell(
                 viewport_point.x,
                 link_pin.y,

@@ -1220,6 +1220,9 @@ GHOSTTY_API void ghostty_surface_mouse_scroll(ghostty_surface_t,
                                                  double,
                                                  double,
                                                  ghostty_input_scroll_mods_t);
+// Positions are measured in rows from the start of scrollback, including fractions.
+GHOSTTY_API void ghostty_surface_scroll_to_row(ghostty_surface_t, double);
+GHOSTTY_API double ghostty_surface_scroll_offset(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_mouse_pressure(ghostty_surface_t, uint32_t, double);
 GHOSTTY_API void ghostty_surface_ime_point(ghostty_surface_t, double*, double*, double*, double*);
 GHOSTTY_API void ghostty_surface_request_close(ghostty_surface_t);

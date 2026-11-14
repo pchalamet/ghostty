@@ -1101,6 +1101,7 @@ pub fn cursorDownScroll(self: *Screen) !void {
         // Grow our pages by one row. The PageList will handle if we need to
         // allocate, prune scrollback, whatever.
         _ = try self.pages.grow();
+        self.pages.output_scroll_count +%= 1;
 
         // If our pin page changed, then grow() pruned the page our cursor
         // was on. This can only happen with a single row active area. With

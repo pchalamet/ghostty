@@ -33,6 +33,9 @@ preedit: ?Preedit = null,
 /// need about the mouse.
 mouse: Mouse = .{},
 
+/// Signed vertical translation of the presented grid in device pixels, as f32.
+scroll_pixels: std.atomic.Value(u32) = .init(0),
+
 /// The number of threads currently waiting to acquire `mutex` via
 /// `lockDemand`. This is not protected by the mutex; it is read by
 /// hot lock/unlock loops (the IO parse thread) in `yieldToDemand` to

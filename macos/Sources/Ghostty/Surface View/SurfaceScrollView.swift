@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import GhosttyKit
 
 /// Wraps a Ghostty surface view in an NSScrollView to provide native macOS scrollbar support.
 ///
@@ -20,10 +21,7 @@ class SurfaceScrollView: NSView {
     private var cancellables: Set<AnyCancellable> = []
     private var isLiveScrolling = false
 
-    /// The last row position sent via scroll_to_row action. Used to avoid
-    /// sending redundant actions when the user drags the scrollbar but stays
-    /// on the same row.
-    private var lastSentRow: Int?
+    private var lastSentRow: Double?
 
     init(contentSize: CGSize, surfaceView: Ghostty.SurfaceView) {
         self.surfaceView = surfaceView
@@ -226,13 +224,11 @@ class SurfaceScrollView: NSView {
             let cellHeight = surfaceView.cellSize.height
             if cellHeight > 0, let scrollbar = surfaceView.scrollbar {
                 // Invert coordinate system: terminal offset is from top, AppKit position from bottom
-                let offsetY =
-                    CGFloat(scrollbar.total - scrollbar.offset - scrollbar.len) * cellHeight
+                let maxRow = Double(scrollbar.total - scrollbar.len)
+                let row = surfaceView.surface.map { ghostty_surface_scroll_offset($0) } ?? Double(scrollbar.offset)
+                let offsetY = CGFloat(max(0, maxRow - row)) * cellHeight
                 scrollView.contentView.scroll(to: CGPoint(x: 0, y: offsetY))
-
-                // Track the current row position to avoid redundant movements when we
-                // move the scrollbar.
-                lastSentRow = Int(scrollbar.offset)
+                lastSentRow = row
             }
         }
 
@@ -261,27 +257,22 @@ class SurfaceScrollView: NSView {
 
     /// Handles live scroll events (user actively dragging the scrollbar).
     ///
-    /// Converts the current scroll position to a row number and sends a `scroll_to_row` action
-    /// to the terminal core. Only sends actions when the row changes to avoid IPC spam.
+    /// Keep the fractional row so the renderer can follow the scrollbar at pixel precision.
     private func handleLiveScroll() {
         // If our cell height is currently zero then we avoid a div by zero below
         // and just don't scroll (there's no where to scroll anyways). This can
         // happen with a tiny terminal.
         let cellHeight = surfaceView.cellSize.height
-        guard cellHeight > 0 else { return }
+        guard cellHeight > 0, let surface = surfaceView.surface else { return }
 
         // AppKit views are +Y going up, so we calculate from the bottom
         let visibleRect = scrollView.contentView.documentVisibleRect
         let documentHeight = documentView.frame.height
         let scrollOffset = documentHeight - visibleRect.origin.y - visibleRect.height
-        let row = Int(scrollOffset / cellHeight)
-
-        // Only send action if the row changed to avoid action spam
+        let row = Double(max(0, scrollOffset) / cellHeight)
         guard row != lastSentRow else { return }
         lastSentRow = row
-
-        // Use the keybinding action to scroll.
-        _ = surfaceView.surfaceModel?.perform(action: "scroll_to_row:\(row)")
+        ghostty_surface_scroll_to_row(surface, row)
     }
 
     /// Handles scrollbar state updates from the terminal core.

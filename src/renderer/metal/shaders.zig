@@ -254,6 +254,11 @@ pub const Uniforms = extern struct {
         use_linear_correction: bool align(1) = false,
     },
 
+    /// Visible grid within the cell buffer, followed by the signed pixel translation.
+    viewport_start: u16 = 0,
+    viewport_rows: u16 = 0,
+    scroll_y: f32 = 0,
+
     const PaddingExtend = packed struct(u8) {
         left: bool = false,
         right: bool = false,

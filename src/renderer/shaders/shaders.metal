@@ -24,6 +24,9 @@ struct Uniforms {
   bool use_display_p3;
   bool use_linear_blending;
   bool use_linear_correction;
+  ushort viewport_start;
+  ushort viewport_rows;
+  float scroll_y;
 };
 
 //-------------------------------------------------------------------
@@ -453,9 +456,11 @@ fragment float4 cell_bg_fragment(
   constant Uniforms& uniforms [[buffer(1)]],
   constant uchar4 *cells [[buffer(2)]]
 ) {
-  int2 grid_pos = int2(floor((in.position.xy - uniforms.grid_padding.wx) / uniforms.cell_size));
+  float2 cell_pos = (in.position.xy - uniforms.grid_padding.wx) / uniforms.cell_size;
+  int2 grid_pos = int2(floor(cell_pos));
 
   float4 bg = float4(0.0);
+  const ushort viewport_rows = uniforms.viewport_rows == 0 ? uniforms.grid_size.y : uniforms.viewport_rows;
 
   // Clamp x position, extends edge bg colors in to padding on sides.
   if (grid_pos.x < 0) {
@@ -479,13 +484,19 @@ fragment float4 cell_bg_fragment(
     } else {
       return bg;
     }
-  } else if (grid_pos.y > uniforms.grid_size.y - 1) {
+  } else if (grid_pos.y >= viewport_rows) {
     if (uniforms.padding_extend & EXTEND_DOWN) {
-      grid_pos.y = uniforms.grid_size.y - 1;
+      grid_pos.y = viewport_rows - 1;
     } else {
       return bg;
     }
   }
+
+  if (viewport_rows == 0) return bg;
+  float visible_y = clamp(cell_pos.y, 0.0f,
+                          float(viewport_rows) - 0.5f / uniforms.cell_size.y);
+  grid_pos.y = clamp(int(floor(visible_y - uniforms.scroll_y / uniforms.cell_size.y))
+                     + int(uniforms.viewport_start), 0, int(uniforms.grid_size.y) - 1);
 
   // Load the color for the cell.
   uchar4 cell_color = cells[grid_pos.y * uniforms.grid_size.x + grid_pos.x];
@@ -561,6 +572,7 @@ vertex CellTextVertexOut cell_text_vertex(
 ) {
   // Convert the grid x, y into world space x, y by accounting for cell size
   float2 cell_pos = uniforms.cell_size * float2(in.grid_pos);
+  cell_pos.y += uniforms.scroll_y - float(uniforms.viewport_start) * uniforms.cell_size.y;
 
   // We use a triangle strip with 4 vertices to render quads,
   // so we determine which corner of the cell this vertex is in
@@ -675,12 +687,20 @@ vertex CellTextVertexOut cell_text_vertex(
   return out;
 }
 
+bool outside_grid_y(float y, constant Uniforms& uniforms) {
+  if (uniforms.viewport_start == 0) return false;
+  float top = uniforms.grid_padding.x;
+  return y < top || y >= top + float(uniforms.viewport_rows) * uniforms.cell_size.y;
+}
+
 fragment float4 cell_text_fragment(
   CellTextVertexOut in [[stage_in]],
   texture2d<float> textureGrayscale [[texture(0)]],
   texture2d<float> textureColor [[texture(1)]],
   constant Uniforms& uniforms [[buffer(1)]]
 ) {
+  if (outside_grid_y(in.position.y, uniforms)) discard_fragment();
+
   constexpr sampler textureSampler(
     coord::pixel,
     address::clamp_to_edge,
@@ -822,6 +842,7 @@ vertex ImageVertexOut image_vertex(
   // adds the source rect width/height components.
   float2 image_pos = (uniforms.cell_size * in.grid_pos) + in.cell_offset;
   image_pos += in.dest_size * corner;
+  image_pos.y += uniforms.scroll_y;
 
   out.position =
       uniforms.projection_matrix * float4(image_pos.x, image_pos.y, 0.0f, 1.0f);
@@ -834,6 +855,8 @@ fragment float4 image_fragment(
   texture2d<float> image [[texture(0)]],
   constant Uniforms& uniforms [[buffer(1)]]
 ) {
+  if (outside_grid_y(in.position.y, uniforms)) discard_fragment();
+
   constexpr sampler textureSampler(
     coord::pixel,
     address::clamp_to_edge,

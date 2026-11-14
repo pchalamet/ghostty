@@ -481,6 +481,12 @@ tracked_pins: PinSet,
 ///
 viewport: Viewport,
 
+/// Fraction of a row below the top viewport pin.
+viewport_fraction: f64 = 0,
+
+/// Full-screen output scrolls, including when old history is pruned.
+output_scroll_count: u64 = 0,
+
 /// The pin used for when the viewport scrolls. This is always pre-allocated
 /// so that scrolling doesn't have a failable memory allocation. This should
 /// never be access directly; use `viewport`.
@@ -996,6 +1002,8 @@ pub fn deinit(self: *PageList) void {
 /// memory to fit the active area.
 pub fn reset(self: *PageList) void {
     defer self.assertIntegrity();
+    self.viewport_fraction = 0;
+    self.output_scroll_count = 0;
 
     // Reset discards all scrollback, so there is nothing left to compress.
     self.page_compression.reset();
@@ -1322,6 +1330,7 @@ pub const Resize = struct {
 /// Resize
 /// TODO: docs
 pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+    self.viewport_fraction = 0;
     defer self.assertIntegrity();
 
     // Resizing forces all nodes to be decompressed today so we need to
@@ -3511,6 +3520,7 @@ pub const Scroll = union(enum) {
 /// previously allocated pages.
 pub fn scroll(self: *PageList, behavior: Scroll) void {
     defer self.assertIntegrity();
+    self.viewport_fraction = 0;
 
     // Special case no-scrollback mode to never allow scrolling.
     if (self.limits.bytes.explicit == 0) {
@@ -4120,6 +4130,17 @@ pub fn split(
     self.pages.insertAfter(original_node, target);
 }
 
+/// Move to an absolute, potentially fractional row of scrollback.
+pub fn scrollToFractionalRow(self: *PageList, offset: f64) void {
+    if (!std.math.isFinite(offset)) return;
+    const current = self.scrollbar();
+    const limit: f64 = @floatFromInt(current.total - current.len);
+    const target = std.math.clamp(offset, 0, limit);
+    const row: usize = @intFromFloat(target);
+    if (row != current.offset) self.scroll(.{ .row = row });
+    self.viewport_fraction = target - @floor(target);
+}
+
 /// This represents the state necessary to render a scrollbar for this
 /// PageList. It has the total size, the offset, and the size of the viewport.
 pub const Scrollbar = struct {
@@ -4133,6 +4154,9 @@ pub const Scrollbar = struct {
 
     /// The length of the visible area. This is including the offset row.
     len: usize,
+
+    /// Sub-row viewport offset for pixel scrolling.
+    fraction: f64 = 0,
 
     /// A zero-sized scrollable region.
     pub const zero: Scrollbar = .{
@@ -4160,7 +4184,8 @@ pub const Scrollbar = struct {
     pub fn eql(self: Scrollbar, other: Scrollbar) bool {
         return self.total == other.total and
             self.offset == other.offset and
-            self.len == other.len;
+            self.len == other.len and
+            self.fraction == other.fraction;
     }
 };
 
@@ -4187,6 +4212,7 @@ pub fn scrollbar(self: *PageList) Scrollbar {
         .total = self.total_rows,
         .offset = self.viewportRowOffset(),
         .len = self.rows, // Length is always rows
+        .fraction = if (self.viewport == .active) 0 else self.viewport_fraction,
     };
 }
 
@@ -11454,6 +11480,38 @@ test "PageList scroll to row 0" {
         .offset = 0,
         .len = s.rows,
     }, s.scrollbar());
+}
+
+test "PageList fractional scrolling preserves the integer viewport" {
+    const testing = std.testing;
+    var s = try init(testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer s.deinit();
+    try s.growRows(20);
+
+    s.scrollToFractionalRow(5.25);
+    const top = s.getTopLeft(.viewport);
+    try testing.expectEqual(@as(usize, 5), s.scrollbar().offset);
+    try testing.expectEqual(0.25, s.scrollbar().fraction);
+
+    s.scrollToFractionalRow(5.75);
+    try testing.expect(top.eql(s.getTopLeft(.viewport)));
+    try testing.expectEqual(0.75, s.scrollbar().fraction);
+    s.scrollToFractionalRow(6.125);
+    try testing.expect(top.down(1).?.eql(s.getTopLeft(.viewport)));
+    try testing.expectEqual(0.125, s.scrollbar().fraction);
+
+    s.scroll(.{ .delta_row = -1 });
+    try testing.expect(top.eql(s.getTopLeft(.viewport)));
+    try testing.expectEqual(0, s.scrollbar().fraction);
+
+    s.scrollToFractionalRow(20.5);
+    try testing.expectEqual(Viewport.active, s.viewport);
+    try testing.expectEqual(@as(usize, 20), s.scrollbar().offset);
+    try testing.expectEqual(0, s.scrollbar().fraction);
+
+    s.scrollToFractionalRow(-0.5);
+    try testing.expectEqual(Viewport.top, s.viewport);
+    try testing.expectEqual(0, s.scrollbar().fraction);
 }
 
 test "PageList scroll to row in scrollback" {

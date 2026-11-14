@@ -1255,7 +1255,9 @@ fn selectionScrollTick(self: *Surface) !void {
     }
 
     const pos = try self.rt_surface.getCursorPos();
-    const pos_vp = self.posToViewport(pos.x, pos.y);
+    // Autoscroll moves the viewport by a whole row and resets its pixel offset.
+    const coord: rendererpkg.Coordinate = .{ .surface = .{ .x = pos.x, .y = pos.y } };
+    const grid = coord.convert(.grid, self.size).grid;
 
     // We need our locked state for the remainder
     self.renderer_state.mutex.lockUncancelable(global.io());
@@ -1263,7 +1265,7 @@ fn selectionScrollTick(self: *Surface) !void {
     const t: *terminal.Terminal = self.renderer_state.terminal;
 
     const selection = self.mouse.selection_gesture.autoscrollTick(t, .{
-        .viewport = pos_vp,
+        .viewport = .{ .x = grid.x, .y = grid.y },
         .xpos = pos.x,
         .ypos = pos.y,
         .rectangle = SurfaceMouse.isRectangleSelectState(self.mouse.mods),
@@ -3596,6 +3598,10 @@ pub fn scrollCallback(
     // Always show the mouse again if it is hidden
     if (self.mouse.hidden) self.showMouse();
 
+    if (comptime builtin.target.os.tag == .macos) {
+        if (scroll_mods.precision and yoff != 0 and try self.scrollViewportPixels(yoff)) return;
+    }
+
     const y: ScrollAmount = if (yoff == 0) .{} else y: {
         // We use cell_size to determine if we have accumulated enough to trigger a scroll
         const cell_size: f64 = @floatFromInt(self.size.cell.height);
@@ -3758,6 +3764,41 @@ pub fn scrollCallback(
     }
 
     try self.queueRender();
+}
+
+/// Consume a precision gesture if it controls our own viewport.
+fn scrollViewportPixels(self: *Surface, delta: f64) !bool {
+    {
+        self.renderer_state.lockDemand(global.io());
+        defer self.renderer_state.unlockDemand(global.io());
+        const term = self.io.terminal;
+        if (term.screens.active_key != .primary or self.isMouseReporting()) return false;
+
+        const pages = &term.screens.active.pages;
+        const scrollbar = pages.scrollbar();
+        const row = @as(f64, @floatFromInt(scrollbar.offset)) + scrollbar.fraction;
+        const cell_height: f64 = @floatFromInt(self.size.cell.height);
+        if (cell_height == 0) return false;
+        pages.scrollToFractionalRow(row - delta * self.config.mouse_scroll_multiplier.precision / cell_height);
+    }
+    try self.queueRender();
+    return true;
+}
+
+pub fn scrollToFractionalRow(self: *Surface, row: f64) !void {
+    {
+        self.renderer_state.lockDemand(global.io());
+        defer self.renderer_state.unlockDemand(global.io());
+        self.io.terminal.screens.active.pages.scrollToFractionalRow(row);
+    }
+    try self.queueRender();
+}
+
+pub fn scrollOffset(self: *Surface) f64 {
+    self.renderer_state.lockDemand(global.io());
+    defer self.renderer_state.unlockDemand(global.io());
+    const scrollbar = self.io.terminal.screens.active.pages.scrollbar();
+    return @as(f64, @floatFromInt(scrollbar.offset)) + scrollbar.fraction;
 }
 
 /// This is called when the content scale of the surface changes. The surface
@@ -3995,13 +4036,7 @@ pub fn mouseButtonCallback(
         // If we can't map the release position to a cell, pass null so the
         // gesture can conservatively treat the release as having moved away
         // from the pressed cell.
-        const release_pin: ?terminal.Pin = if (release_pos) |pos| pin: {
-            const release_vp = self.posToViewport(pos.x, pos.y);
-            break :pin self.io.terminal.screens.active.pages.pin(.{ .viewport = .{
-                .x = release_vp.x,
-                .y = release_vp.y,
-            } });
-        } else null;
+        const release_pin = if (release_pos) |pos| self.viewportPinAtPos(pos) else null;
         self.mouse.selection_gesture.release(
             self.renderer_state.terminal,
             .{ .pin = release_pin },
@@ -4099,27 +4134,8 @@ pub fn mouseButtonCallback(
         self.renderer_state.mutex.lockUncancelable(global.io());
         defer self.renderer_state.mutex.unlock(global.io());
         const t: *terminal.Terminal = self.renderer_state.terminal;
-        const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
-
         const pos = try self.rt_surface.getCursorPos();
-        const pin = pin: {
-            const pt_viewport = self.posToViewport(pos.x, pos.y);
-            const pin = screen.pages.pin(.{
-                .viewport = .{
-                    .x = pt_viewport.x,
-                    .y = pt_viewport.y,
-                },
-            }) orelse {
-                // Weird... our viewport x/y that we just converted isn't
-                // found in our pages. This is probably a bug but we don't
-                // want to crash in releases because its harmless. So, we
-                // only assert in debug mode.
-                if (comptime std.debug.runtime_safety) unreachable;
-                break :click;
-            };
-
-            break :pin pin;
-        };
+        const pin = self.viewportPinAtPos(pos) orelse break :click;
 
         var press_selection = try self.mouse.selection_gesture.press(t, .{
             .time = std.Io.Timestamp.now(global.io(), .awake),
@@ -4202,20 +4218,7 @@ pub fn mouseButtonCallback(
         // Get our viewport pin
         const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
         const pos = try self.rt_surface.getCursorPos();
-        const pin = pin: {
-            const pt_viewport = self.posToViewport(pos.x, pos.y);
-            const pin = screen.pages.pin(.{
-                .viewport = .{
-                    .x = pt_viewport.x,
-                    .y = pt_viewport.y,
-                },
-            }) orelse {
-                if (comptime std.debug.runtime_safety) unreachable;
-                break :sel;
-            };
-
-            break :pin pin;
-        };
+        const pin = self.viewportPinAtPos(pos) orelse break :sel;
 
         switch (self.config.right_click_action) {
             .ignore => {},
@@ -4326,21 +4329,7 @@ fn maybePromptClick(self: *Surface) !bool {
 
     // Get the pin for our mouse click.
     const pos = try self.rt_surface.getCursorPos();
-    const pos_vp = self.posToViewport(pos.x, pos.y);
-    const click_pin: terminal.Pin = pin: {
-        const pin = screen.pages.pin(.{
-            .viewport = .{
-                .x = pos_vp.x,
-                .y = pos_vp.y,
-            },
-        }) orelse {
-            // See mouseButtonCallback for explanation
-            if (comptime std.debug.runtime_safety) unreachable;
-            return false;
-        };
-
-        break :pin pin;
-    };
+    const click_pin = self.viewportPinAtPos(pos) orelse return false;
 
     // Get our cursor's most current prompt.
     const prompt_pin: terminal.Pin = prompt_pin: {
@@ -4372,6 +4361,7 @@ fn maybePromptClick(self: *Surface) !bool {
         .none => unreachable,
 
         .click_events => |v| {
+            const pos_vp = self.posToViewport(pos.x, pos.y);
             // For the event, we always send a left-click press event.
             // This matches what Kitty sends.
             const key: u8, const y: u32 = switch (v) {
@@ -4447,16 +4437,7 @@ fn linkAtPos(
     self: *Surface,
     pos: apprt.CursorPos,
 ) !?Link {
-    // Convert our cursor position to a screen point.
-    const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
-    const mouse_pin: terminal.Pin = mouse_pin: {
-        const point = self.posToViewport(pos.x, pos.y);
-        const pin = screen.pages.pin(.{ .viewport = point }) orelse {
-            log.warn("failed to get pin for clicked point", .{});
-            return null;
-        };
-        break :mouse_pin pin;
-    };
+    const mouse_pin = self.viewportPinAtPos(pos) orelse return null;
 
     // Get our comparison mods
     const mouse_mods = self.mouseModsWithCapture(self.mouse.mods);
@@ -4746,11 +4727,7 @@ pub fn cursorPosCallback(
         insp.mouse.last_xpos = pos.x;
         insp.mouse.last_ypos = pos.y;
 
-        const screen: *terminal.Screen = self.renderer_state.terminal.screens.active;
-        insp.mouse.last_point = screen.pages.pin(.{ .viewport = .{
-            .x = pos_vp.x,
-            .y = pos_vp.y,
-        } });
+        insp.mouse.last_point = self.viewportPinAtPos(pos);
         try self.queueRender();
     }
 
@@ -4818,17 +4795,7 @@ pub fn cursorPosCallback(
         // All roads lead to requiring a re-render at this point.
         try self.queueRender();
 
-        // Convert to points
-        const screen: *terminal.Screen = t.screens.active;
-        const pin = screen.pages.pin(.{
-            .viewport = .{
-                .x = pos_vp.x,
-                .y = pos_vp.y,
-            },
-        }) orelse {
-            if (comptime std.debug.runtime_safety) unreachable;
-            return;
-        };
+        const pin = self.viewportPinAtPos(pos) orelse return;
 
         // Perform our drag behavior in our gesture handler.
         const drag_selection = self.mouse.selection_gesture.drag(t, .{
@@ -4889,11 +4856,42 @@ pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) !void {
     self.queueIo(.{ .color_scheme_report = .{ .force = false } }, .unlocked);
 }
 
-pub fn posToViewport(self: Surface, xpos: f64, ypos: f64) terminal.point.Coordinate {
-    // Get our grid cell
+pub fn posToViewport(self: *const Surface, xpos: f64, ypos: f64) terminal.point.Coordinate {
     const coord: rendererpkg.Coordinate = .{ .surface = .{ .x = xpos, .y = ypos } };
     const grid = coord.convert(.grid, self.size).grid;
-    return .{ .x = grid.x, .y = grid.y };
+    const row = self.presentedViewportRow(coord) orelse return .{ .x = grid.x, .y = grid.y };
+    return .{ .x = grid.x, .y = @intCast(@max(0, row)) };
+}
+
+/// Map a mouse position to the presented grid, including the partial rows.
+fn presentedViewportRow(self: *const Surface, coord: rendererpkg.Coordinate) ?isize {
+    const scroll_pixels: f32 = @bitCast(self.renderer_state.scroll_pixels.load(.monotonic));
+    if (scroll_pixels == 0 or self.size.cell.height == 0) return null;
+
+    const term = coord.convert(.terminal, self.size).terminal;
+    const height: f64 = @floatFromInt(self.size.cell.height);
+    const rows = self.size.grid().rows;
+    const y = std.math.clamp(term.y, 0, @as(f64, @floatFromInt(rows)) * height - 1);
+    return @intFromFloat(@floor((y - scroll_pixels) / height));
+}
+
+/// The renderer mutex must be held.
+fn viewportPinAtPos(self: *const Surface, pos: apprt.CursorPos) ?terminal.Pin {
+    const coord: rendererpkg.Coordinate = .{ .surface = .{ .x = pos.x, .y = pos.y } };
+    const grid = coord.convert(.grid, self.size).grid;
+    const pages = &self.io.terminal.screens.active.pages;
+    if (self.presentedViewportRow(coord)) |row| {
+        if (row >= 0) {
+            if (pages.pin(.{ .viewport = .{ .x = grid.x, .y = @intCast(row) } })) |pin| return pin;
+        } else if (pages.getTopLeft(.viewport).up(@intCast(-row))) |pin| {
+            if (grid.x < pin.node.cols()) {
+                var result = pin;
+                result.x = grid.x;
+                return result;
+            }
+        }
+    }
+    return pages.pin(.{ .viewport = .{ .x = grid.x, .y = grid.y } });
 }
 
 /// Scroll to the bottom of the viewport.

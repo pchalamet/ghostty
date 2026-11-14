@@ -106,6 +106,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         const RenderPass = GraphicsAPI.RenderPass;
 
         const shaderpkg = GraphicsAPI.shaders;
+
+        // Scrollback gestures and output animation share the same row cache.
+        const smooth_scroll = builtin.target.os.tag == .macos and @hasField(shaderpkg.Uniforms, "scroll_y");
+        const output_overscan = 3;
+        const scroll_duration_ns = 100 * std.time.ns_per_ms;
         const Shaders = shaderpkg.Shaders;
 
         /// Allocator that can be used
@@ -146,9 +151,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         /// shaders to update their state.
         custom_shader_focused_changed: bool = false,
 
-        /// The most recent scrollbar state. We use this as a cache to
-        /// determine if we need to notify the apprt that there was a
-        /// scrollbar change.
+        output_scroll_count: ?u64 = null,
+        output_scroll_start: ?std.Io.Timestamp = null,
+        // The render thread schedules wakes without holding the draw mutex.
+        output_scroll_active: std.atomic.Value(bool) = .init(false),
+        output_scroll_distance: f32 = 0,
+        manual_scroll_pixels: f32 = 0,
+        presented_scroll_pixels: ?*std.atomic.Value(u32) = null,
+
+        /// Cached to detect changes that need to be sent to the app runtime.
         scrollbar: terminal.Scrollbar,
         scrollbar_dirty: bool,
 
@@ -1134,11 +1145,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         ///
         /// Must be called on the render thread.
         pub fn animationWake(self: *const Self) ?AnimationWake {
-            // Custom shaders animate by redrawing on a fixed cadence,
-            // gated by configuration and focus.
-            const shader_delay: ?u64 = shader: {
-                if (!self.has_custom_shaders) break :shader null;
-                break :shader switch (self.config.custom_shader_animation) {
+            // Output scroll and custom shaders only need a redraw.
+            const draw_delay: ?u64 = draw: {
+                if (self.output_scroll_active.load(.monotonic)) break :draw draw_interval_ms;
+                if (!self.has_custom_shaders) break :draw null;
+                break :draw switch (self.config.custom_shader_animation) {
                     .false => null,
                     .always => draw_interval_ms,
                     .true => if (self.focused) draw_interval_ms else null,
@@ -1164,12 +1175,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // An update wake includes a draw, so it wins ties.
             if (kitty_delay) |k| {
-                if (shader_delay == null or k <= shader_delay.?) {
+                if (draw_delay == null or k <= draw_delay.?) {
                     return .{ .delay_ms = k, .kind = .update };
                 }
             }
 
-            if (shader_delay) |s| return .{ .delay_ms = s, .kind = .draw };
+            if (draw_delay) |delay| return .{ .delay_ms = delay, .kind = .draw };
 
             return null;
         }
@@ -1402,6 +1413,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 mouse: renderer.State.Mouse,
                 preedit: ?renderer.State.Preedit,
                 scrollbar: terminal.Scrollbar,
+                output_scroll_count: ?u64,
+                manual_scroll_pixels: f32,
                 overlay_features: []const Overlay.Feature,
             };
 
@@ -1476,6 +1489,16 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     break :next now_ms + delay;
                 };
 
+                const screen = state.terminal.screens.active;
+                if (comptime smooth_scroll) {
+                    self.terminal_state.overscan_request =
+                        if (screen.pages.rows <= std.math.maxInt(u16) - output_overscan - 1 and
+                        state.terminal.screens.active_key == .primary)
+                            .{ .above = output_overscan, .below = 1 }
+                        else
+                            .{};
+                }
+
                 // Begin the update of our terminal state. Work that
                 // doesn't require terminal access (e.g. style
                 // denormalization) is deferred to the endUpdate call
@@ -1497,7 +1520,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // naturally limits the number of calls to this method (it
                 // can be expensive) and also makes it so we don't need another
                 // cross-thread mailbox message within the IO path.
-                const scrollbar = state.terminal.screens.active.pages.scrollbar();
+                const scrollbar = screen.pages.scrollbar();
+                const manual_scroll_pixels: f32 = if (smooth_scroll and self.terminal_state.overscan.below != 0) offset: {
+                    const height: f64 = @floatFromInt(self.grid_metrics.cell_height);
+                    break :offset @floatCast(@min(@floor(scrollbar.fraction * height), @max(0, height - 1)));
+                } else 0;
 
                 // Get our preedit state
                 const preedit: ?renderer.State.Preedit = preedit: {
@@ -1557,6 +1584,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     .mouse = state.mouse,
                     .preedit = preedit,
                     .scrollbar = scrollbar,
+                    .manual_scroll_pixels = manual_scroll_pixels,
+                    .output_scroll_count = if (smooth_scroll and
+                        state.terminal.screens.active_key == .primary and
+                        screen.pages.viewport == .active and
+                        state.terminal.flags.mouse_event == .none and
+                        state.terminal.scrolling_region.bottom == state.terminal.rows - 1)
+                        screen.pages.output_scroll_count
+                    else
+                        null,
                     .overlay_features = overlay_features,
                 };
             };
@@ -1646,6 +1682,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             {
                 self.draw_mutex.lockUncancelable(global.io());
                 defer self.draw_mutex.unlock(global.io());
+
+                if (comptime smooth_scroll) {
+                    self.manual_scroll_pixels = critical.manual_scroll_pixels;
+                    self.presented_scroll_pixels = &state.scroll_pixels;
+                    self.updateOutputScroll(critical.output_scroll_count);
+                }
 
                 // Build our GPU cells
                 self.rebuildCells(
@@ -1870,6 +1912,21 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // Upload the background image to the GPU as necessary.
             try self.uploadBackgroundImage();
+
+            if (comptime smooth_scroll) {
+                const remaining = if (self.output_scroll_start != null)
+                    self.outputScrollRemaining(.now(global.io(), .awake))
+                else
+                    0;
+                self.uniforms.scroll_y = @round(remaining) - self.manual_scroll_pixels;
+                if (remaining == 0 and self.output_scroll_start != null) {
+                    self.output_scroll_start = null;
+                    self.output_scroll_active.store(false, .monotonic);
+                }
+                if (self.presented_scroll_pixels) |offset| {
+                    offset.store(@bitCast(self.uniforms.scroll_y), .monotonic);
+                }
+            }
 
             // Update per-frame custom shader uniforms.
             try self.updateCustomShaderUniformsForFrame();
@@ -2254,6 +2311,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             defer self.draw_mutex.unlock(global.io());
 
             self.size = size;
+            if (comptime smooth_scroll) self.updateOutputScroll(null);
             self.updateScreenSizeUniforms();
 
             // Some graphics APIs need to manually update their viewport,
@@ -2263,6 +2321,41 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             }
 
             log.debug("screen size size={}", .{size});
+        }
+
+        fn outputScrollRemaining(self: *const Self, now: std.Io.Timestamp) f32 {
+            const start = self.output_scroll_start orelse return 0;
+            const elapsed: f32 = @floatFromInt(start.durationTo(now).nanoseconds);
+            const remaining = std.math.clamp(1 - elapsed / scroll_duration_ns, 0, 1);
+            return self.output_scroll_distance * remaining * remaining;
+        }
+
+        /// Output can arrive before the last animation completes. Carry its
+        /// remaining displacement forward, bounded by the available history.
+        fn updateOutputScroll(self: *Self, count: ?u64) void {
+            defer self.output_scroll_active.store(self.output_scroll_start != null, .monotonic);
+            const previous = self.output_scroll_count;
+            self.output_scroll_count = count;
+            const current = count orelse {
+                self.output_scroll_start = null;
+                return;
+            };
+            const last = previous orelse return;
+            if (current < last or self.terminal_state.overscan.above == 0) {
+                self.output_scroll_start = null;
+                return;
+            }
+            if (current == last) return;
+
+            const now: std.Io.Timestamp = .now(global.io(), .awake);
+            const height: f32 = @floatFromInt(self.grid_metrics.cell_height);
+            const limit: f32 = @floatFromInt(self.terminal_state.overscan.above);
+            const distance: f32 = @floatFromInt(current - last);
+            self.output_scroll_distance = @min(
+                self.outputScrollRemaining(now) + distance * height,
+                limit * height,
+            );
+            self.output_scroll_start = now;
         }
 
         /// Update uniforms that are based on the screen size.
@@ -2276,7 +2369,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 self.size.padding,
                 .{
                     .columns = self.cells.size.columns,
-                    .rows = self.cells.size.rows,
+                    .rows = if (smooth_scroll) self.uniforms.viewport_rows else self.cells.size.rows,
                 },
                 .{
                     .width = self.grid_metrics.cell_width,
@@ -2484,6 +2577,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     cursor.grid_pos[1] * cell.height + padding.top,
                 );
 
+                if (comptime smooth_scroll) {
+                    pixel_y += self.uniforms.scroll_y -
+                        @as(f32, @floatFromInt(self.uniforms.viewport_start)) * @as(f32, @floatFromInt(cell.height));
+                }
+
                 // If +Y is up in our shaders, we need to flip the coordinate
                 // so that it's instead the top edge of the cell relative to
                 // the *bottom* of the screen.
@@ -2635,19 +2733,27 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         ) Allocator.Error!void {
             const state: *terminal.RenderState = &self.terminal_state;
 
+            const vp_start: u16 = @intCast(state.viewportStart());
+            const buffer_rows = state.rows + state.overscan_request.above + state.overscan_request.below;
             const grid_size_diff =
-                self.cells.size.rows != state.rows or
+                self.cells.size.rows != buffer_rows or
                 self.cells.size.columns != state.cols;
+
+            if (comptime smooth_scroll) {
+                self.uniforms.viewport_start = vp_start;
+                self.uniforms.viewport_rows = state.rows;
+            }
 
             if (grid_size_diff) {
                 var new_size = self.cells.size;
-                new_size.rows = state.rows;
+                new_size.rows = buffer_rows;
                 new_size.columns = state.cols;
                 try self.cells.resize(self.alloc, new_size);
 
                 // Update our uniforms accordingly, otherwise
                 // our background cells will be out of place.
                 self.uniforms.grid_size = .{ new_size.columns, new_size.rows };
+                if (comptime smooth_scroll) self.updateScreenSizeUniforms();
             }
 
             const rebuild = state.dirty == .full or grid_size_diff;
@@ -2684,14 +2790,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             const row_selection = row_data.items(.selection);
             const row_highlights = row_data.items(.highlights);
 
-            // If our cell contents buffer is shorter than the screen viewport,
-            // we render the rows that fit, starting from the bottom. If instead
-            // the viewport is shorter than the cell contents buffer, we align
-            // the top of the viewport with the top of the contents buffer.
-            const row_len: usize = @min(
-                state.rows,
-                self.cells.size.rows,
-            );
+            const captured = state.rowDataRange();
+            if (!rebuild) {
+                // Unused overscan slots can still hold data from a previous frame.
+                for (0..captured.start) |y| self.cells.clear(@intCast(y));
+                for (captured.end..buffer_rows) |y| self.cells.clear(@intCast(y));
+            }
 
             // Determine our x/y range for preedit. We don't want to render anything
             // here because we will render the preedit separately.
@@ -2705,26 +2809,26 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // If our preedit row isn't dirty then we don't need the
                 // preedit range. This also avoids an issue later where we
                 // unconditionally add preedit cells when this is set.
-                if (!rebuild and !row_dirty[cursor_vp.y]) break :preedit null;
+                if (!rebuild and !row_dirty[vp_start + cursor_vp.y]) break :preedit null;
 
                 const range = preedit_v.range(
                     cursor_vp.x,
                     state.cols - 1,
                 );
                 break :preedit .{
-                    .y = @intCast(cursor_vp.y),
+                    .y = vp_start + @as(u16, @intCast(cursor_vp.y)),
                     .x = .{ range.start, range.end },
                     .cp_offset = range.cp_offset,
                 };
             } else null;
 
             for (
-                0..,
-                row_raws[0..row_len],
-                row_cells[0..row_len],
-                row_dirty[0..row_len],
-                row_selection[0..row_len],
-                row_highlights[0..row_len],
+                captured.start..,
+                row_raws[captured.start..captured.end],
+                row_cells[captured.start..captured.end],
+                row_dirty[captured.start..captured.end],
+                row_selection[captured.start..captured.end],
+                row_highlights[captured.start..captured.end],
             ) |y_usize, row, *cells, *dirty, selection, *highlights| {
                 const y: terminal.size.CellCountInt = @intCast(y_usize);
 
@@ -2772,7 +2876,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 const cursor_vp = state.cursor.viewport orelse break :cursor;
                 const cursor_style: terminal.Style = cursor_style: {
                     const cells = state.row_data.items(.cells);
-                    const cell = cells[cursor_vp.y].get(cursor_vp.x);
+                    const cell = cells[vp_start + cursor_vp.y].get(cursor_vp.x);
                     break :cursor_style if (cell.raw.hasStyling())
                         cell.style
                     else
@@ -2843,7 +2947,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                             .narrow, .spacer_head, .wide => cursor_vp.x,
                             .spacer_tail => cursor_vp.x -| 1,
                         },
-                        @intCast(cursor_vp.y),
+                        vp_start + @as(u16, @intCast(cursor_vp.y)),
                     };
 
                     self.uniforms.bools.cursor_wide = switch (wide) {
@@ -2933,6 +3037,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             links: *const terminal.RenderState.CellSet,
         ) !void {
             const state = &self.terminal_state;
+            const vp_start: u16 = @intCast(state.viewportStart());
 
             // If our viewport is wider than our cell contents buffer,
             // we still only process cells up to the width of the buffer.
@@ -2951,7 +3056,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 .background, .@"extend-always" => {},
 
                 // Apply heuristics for padding extension.
-                .extend => if (y == 0) {
+                .extend => if (y == vp_start) {
                     self.uniforms.padding_extend.up = !rowNeverExtendBg(
                         row,
                         cells_raw,
@@ -2959,7 +3064,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                         &state.colors.palette,
                         state.colors.background,
                     );
-                } else if (y == self.cells.size.rows - 1) {
+                } else if (y == vp_start + state.rows - 1) {
                     self.uniforms.padding_extend.down = !rowNeverExtendBg(
                         row,
                         cells_raw,
@@ -2980,7 +3085,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // visible on this viewport.
                 .cursor_x = cursor_x: {
                     const vp = state.cursor.viewport orelse break :cursor_x null;
-                    if (vp.y != y) break :cursor_x null;
+                    if (vp_start + vp.y != y) break :cursor_x null;
                     break :cursor_x vp.x;
                 },
             };
@@ -3246,9 +3351,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // an underline, in which case use a double underline to
                 // distinguish them.
                 const underline: terminal.Attribute.Underline = underline: {
-                    if (links.contains(.{
+                    if (y >= vp_start and links.contains(.{
                         .x = @intCast(x),
-                        .y = @intCast(y),
+                        .y = y - vp_start,
                     })) {
                         break :underline if (style.flags.underline == .single)
                             .double
@@ -3614,7 +3719,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             self.cells.setCursor(.{
                 .atlas = .grayscale,
                 .bools = .{ .is_cursor_glyph = true },
-                .grid_pos = .{ x, cursor_vp.y },
+                .grid_pos = .{ x, @as(u16, @intCast(self.terminal_state.viewportStart())) + @as(u16, @intCast(cursor_vp.y)) },
                 .color = .{ cursor_color.r, cursor_color.g, cursor_color.b, alpha },
                 .glyph_pos = .{ render.glyph.atlas_x, render.glyph.atlas_y },
                 .glyph_size = .{ render.glyph.width, render.glyph.height },
