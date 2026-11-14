@@ -566,7 +566,7 @@ language: ?[:0]const u8 = null,
 /// The second directory is the `themes` subdirectory of the Ghostty resources
 /// directory. Ghostty ships with a multitude of themes that will be installed
 /// into this directory. On macOS, this list is in the
-/// `Ghostty.app/Contents/Resources/ghostty/themes` directory. On Linux, this
+/// `Ttyrex.app/Contents/Resources/ghostty/themes` directory. On Linux, this
 /// list is in the `share/ghostty/themes` directory (wherever you installed the
 /// Ghostty "share" directory.
 ///
@@ -4259,7 +4259,7 @@ fn writeConfigTemplate(path: []const u8) !void {
 /// Load configurations from the default configuration files. The default
 /// configuration file is at `$XDG_CONFIG_HOME/ghostty/config.ghostty`.
 ///
-/// On macOS, `$HOME/Library/Application Support/$CFBundleIdentifier/`
+/// On macOS, `$HOME/Library/Application Support/com.mitchellh.ghostty/`
 /// is also loaded.
 ///
 /// The legacy `config` file (without extension) is first loaded,

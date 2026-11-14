@@ -143,7 +143,7 @@ jobs:
 
       - name: Download dSYM
         run: |
-          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-slow-dsym.zip > dsym.zip
+          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-slow-dsym.zip > dsym.zip
 
       - name: Upload dSYM to Sentry
         env:
@@ -166,7 +166,7 @@ jobs:
 
       - name: Download dSYM
         run: |
-          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-fast-dsym.zip > dsym.zip
+          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-fast-dsym.zip > dsym.zip
 
       - name: Upload dSYM to Sentry
         env:
@@ -189,7 +189,7 @@ jobs:
 
       - name: Download dSYM
         run: |
-          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-dsym.zip > dsym.zip
+          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-dsym.zip > dsym.zip
 
       - name: Upload dSYM to Sentry
         env:
@@ -618,7 +618,7 @@ jobs:
       # The native app is built with native XCode tooling. This also does
       # codesigning. IMPORTANT: this must NOT run in a Nix environment.
       # Nix breaks xcodebuild so this has to be run outside.
-      - name: Build Ghostty.app
+      - name: Build Ttyrex.app
         run: |
           cd macos
           xcodebuild -target Ghostty -configuration Release \
@@ -632,13 +632,13 @@ jobs:
           SPARKLE_KEY_PUB: ${{ secrets.PROD_MACOS_SPARKLE_KEY_PUB }}
         run: |
           # Version Info
-          /usr/libexec/PlistBuddy -c "Set :GhosttyCommit $GHOSTTY_COMMIT" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GHOSTTY_BUILD" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GHOSTTY_COMMIT" "macos/build/Release/Ghostty.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :GhosttyCommit $GHOSTTY_COMMIT" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GHOSTTY_BUILD" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GHOSTTY_COMMIT" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
 
           # Updater
-          /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_KEY_PUB" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "macos/build/Release/Ghostty.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_KEY_PUB" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
 
       - name: Codesign app bundle
         env:
@@ -664,15 +664,15 @@ jobs:
           #     but since they're part of the build, they still need to be
           #     codesigned.
           #   - The binaries in the "Versions" folders need to NOT be symlinks.
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/PlugIns/DockTilePlugin.plugin"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/PlugIns/DockTilePlugin.plugin"
 
           # Codesign the app bundle
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime --entitlements "macos/Ghostty.entitlements" macos/build/Release/Ghostty.app
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime --entitlements "macos/Ghostty.entitlements" macos/build/Release/Ttyrex.app
 
       - name: Create DMG
         env:
@@ -681,9 +681,9 @@ jobs:
           npm install --global create-dmg
           create-dmg \
             --identity="$MACOS_CERTIFICATE_NAME" \
-            ./macos/build/Release/Ghostty.app \
+            ./macos/build/Release/Ttyrex.app \
             ./
-          mv ./Ghostty*.dmg ./Ghostty.dmg
+          mv ./Ttyrex*.dmg ./Ttyrex.dmg
 
       - name: "Notarize DMG"
         env:
@@ -703,21 +703,21 @@ jobs:
           # characteristics. Visit the Notarization docs for more information and strategies on how to optimize it if
           # you're curious
           echo "Notarize dmg"
-          xcrun notarytool submit "Ghostty.dmg" --keychain-profile "notarytool-profile" --wait
+          xcrun notarytool submit "Ttyrex.dmg" --keychain-profile "notarytool-profile" --wait
 
           # Finally, we need to "attach the staple" to our executable, which will allow our app to be
           # validated by macOS even when an internet connection is not available. We do this to
           # both the app and the dmg
           echo "Attach staple"
-          xcrun stapler staple "Ghostty.dmg"
-          xcrun stapler staple "macos/build/Release/Ghostty.app"
+          xcrun stapler staple "Ttyrex.dmg"
+          xcrun stapler staple "macos/build/Release/Ttyrex.app"
 
       # Zip up the app and symbols
       - name: Zip App
         run: |
           cd macos/build/Release
-          zip -9 -r --symlinks ../../../ghostty-macos-universal.zip Ghostty.app
-          zip -9 -r --symlinks ../../../ghostty-macos-universal-dsym.zip Ghostty.app.dSYM/
+          zip -9 -r --symlinks ../../../ttyrex-macos-universal.zip Ttyrex.app
+          zip -9 -r --symlinks ../../../ttyrex-macos-universal-dsym.zip Ttyrex.app.dSYM/
 
       # Update Release
       - name: Release
@@ -728,8 +728,8 @@ jobs:
           tag_name: tip
           target_commitish: ${{ github.sha }}
           files: |
-            ghostty-macos-universal.zip
-            Ghostty.dmg
+            ttyrex-macos-universal.zip
+            Ttyrex.dmg
           token: ${{ secrets.GH_RELEASE_TOKEN }}
 
       # Create our appcast for Sparkle
@@ -741,7 +741,7 @@ jobs:
           SPARKLE_KEY: ${{ secrets.PROD_MACOS_SPARKLE_KEY }}
         run: |
           echo $SPARKLE_KEY > signing.key
-          sign_update -f signing.key Ghostty.dmg > sign_update.txt
+          sign_update -f signing.key Ttyrex.dmg > sign_update.txt
           curl -L https://tip.files.ghostty.org/appcast.xml > appcast.xml
           python3 ./dist/macos/update_appcast_tip.py
           test -f appcast_new.xml
@@ -751,9 +751,9 @@ jobs:
         run: |
           mkdir blob
           mkdir -p blob/${GHOSTTY_COMMIT_LONG}
-          cp ghostty-macos-universal.zip blob/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal.zip
-          cp ghostty-macos-universal-dsym.zip blob/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-dsym.zip
-          cp Ghostty.dmg blob/${GHOSTTY_COMMIT_LONG}/Ghostty.dmg
+          cp ttyrex-macos-universal.zip blob/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal.zip
+          cp ttyrex-macos-universal-dsym.zip blob/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-dsym.zip
+          cp Ttyrex.dmg blob/${GHOSTTY_COMMIT_LONG}/Ttyrex.dmg
 
       - name: Upload to R2
         uses: ryand56/r2-upload-action@33ebb7a494b3a8a3c5ed2ea6bbdc72e707090317 # v1.5
@@ -793,9 +793,9 @@ jobs:
         run: |
           cat << EOF | tee release-urls.txt
           Release URLs:
-            App Bundle: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal.zip
-            Debug Symbols: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-dsym.zip
-            DMG: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/Ghostty.dmg
+            App Bundle: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal.zip
+            Debug Symbols: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-dsym.zip
+            DMG: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/Ttyrex.dmg
           EOF
 
       - name: Upload Release URLs
@@ -874,7 +874,7 @@ jobs:
       # The native app is built with native XCode tooling. This also does
       # codesigning. IMPORTANT: this must NOT run in a Nix environment.
       # Nix breaks xcodebuild so this has to be run outside.
-      - name: Build Ghostty.app
+      - name: Build Ttyrex.app
         run: |
           cd macos
           xcodebuild -target Ghostty -configuration Release \
@@ -888,13 +888,13 @@ jobs:
           SPARKLE_KEY_PUB: ${{ secrets.PROD_MACOS_SPARKLE_KEY_PUB }}
         run: |
           # Version Info
-          /usr/libexec/PlistBuddy -c "Set :GhosttyCommit $GHOSTTY_COMMIT" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GHOSTTY_BUILD" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GHOSTTY_COMMIT" "macos/build/Release/Ghostty.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :GhosttyCommit $GHOSTTY_COMMIT" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GHOSTTY_BUILD" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GHOSTTY_COMMIT" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
 
           # Updater
-          /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_KEY_PUB" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "macos/build/Release/Ghostty.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_KEY_PUB" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
 
       - name: Codesign app bundle
         env:
@@ -920,15 +920,15 @@ jobs:
           #     but since they're part of the build, they still need to be
           #     codesigned.
           #   - The binaries in the "Versions" folders need to NOT be symlinks.
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/PlugIns/DockTilePlugin.plugin"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/PlugIns/DockTilePlugin.plugin"
 
           # Codesign the app bundle
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime --entitlements "macos/Ghostty.entitlements" macos/build/Release/Ghostty.app
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime --entitlements "macos/Ghostty.entitlements" macos/build/Release/Ttyrex.app
 
       - name: "Notarize app bundle"
         env:
@@ -947,7 +947,7 @@ jobs:
           # Therefore, we create a zip file containing our app bundle, so that we can send it to the
           # notarization service
           echo "Creating temp notarization archive"
-          ditto -c -k --keepParent "macos/build/Release/Ghostty.app" "notarization.zip"
+          ditto -c -k --keepParent "macos/build/Release/Ttyrex.app" "notarization.zip"
 
           # Here we send the notarization request to the Apple's Notarization service, waiting for the result.
           # This typically takes a few seconds inside a CI environment, but it might take more depending on the App
@@ -959,14 +959,14 @@ jobs:
           # Finally, we need to "attach the staple" to our executable, which will allow our app to be
           # validated by macOS even when an internet connection is not available.
           echo "Attach staple"
-          xcrun stapler staple "macos/build/Release/Ghostty.app"
+          xcrun stapler staple "macos/build/Release/Ttyrex.app"
 
       # Zip up the app
       - name: Zip App
         run: |
           cd macos/build/Release
-          zip -9 -r --symlinks ../../../ghostty-macos-universal-debug-slow.zip Ghostty.app
-          zip -9 -r --symlinks ../../../ghostty-macos-universal-debug-slow-dsym.zip Ghostty.app.dSYM/
+          zip -9 -r --symlinks ../../../ttyrex-macos-universal-debug-slow.zip Ttyrex.app
+          zip -9 -r --symlinks ../../../ttyrex-macos-universal-debug-slow-dsym.zip Ttyrex.app.dSYM/
 
       # Update Release
       - name: Release
@@ -976,7 +976,7 @@ jobs:
           prerelease: true
           tag_name: tip
           target_commitish: ${{ github.sha }}
-          files: ghostty-macos-universal-debug-slow.zip
+          files: ttyrex-macos-universal-debug-slow.zip
           token: ${{ secrets.GH_RELEASE_TOKEN }}
 
       # Update Blob Storage
@@ -984,8 +984,8 @@ jobs:
         run: |
           mkdir blob
           mkdir -p blob/${GHOSTTY_COMMIT_LONG}
-          cp ghostty-macos-universal-debug-slow.zip blob/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-slow.zip
-          cp ghostty-macos-universal-debug-slow-dsym.zip blob/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-slow-dsym.zip
+          cp ttyrex-macos-universal-debug-slow.zip blob/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-slow.zip
+          cp ttyrex-macos-universal-debug-slow-dsym.zip blob/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-slow-dsym.zip
       - name: Upload to R2
         uses: ryand56/r2-upload-action@33ebb7a494b3a8a3c5ed2ea6bbdc72e707090317 # v1.5
         with:
@@ -999,8 +999,8 @@ jobs:
       - name: Echo Release URLs
         run: |
           echo "Release URLs:"
-          echo "  App Bundle: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-slow.zip"
-          echo "  Debug Symbols: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-slow-dsym.zip"
+          echo "  App Bundle: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-slow.zip"
+          echo "  Debug Symbols: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-slow-dsym.zip"
 
   build-macos-debug-fast:
     needs: [setup]
@@ -1071,7 +1071,7 @@ jobs:
       # The native app is built with native XCode tooling. This also does
       # codesigning. IMPORTANT: this must NOT run in a Nix environment.
       # Nix breaks xcodebuild so this has to be run outside.
-      - name: Build Ghostty.app
+      - name: Build Ttyrex.app
         run: |
           cd macos
           xcodebuild -target Ghostty -configuration Release \
@@ -1085,13 +1085,13 @@ jobs:
           SPARKLE_KEY_PUB: ${{ secrets.PROD_MACOS_SPARKLE_KEY_PUB }}
         run: |
           # Version Info
-          /usr/libexec/PlistBuddy -c "Set :GhosttyCommit $GHOSTTY_COMMIT" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GHOSTTY_BUILD" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GHOSTTY_COMMIT" "macos/build/Release/Ghostty.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :GhosttyCommit $GHOSTTY_COMMIT" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GHOSTTY_BUILD" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GHOSTTY_COMMIT" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
 
           # Updater
-          /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_KEY_PUB" "macos/build/Release/Ghostty.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "macos/build/Release/Ghostty.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_KEY_PUB" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :SUEnableAutomaticChecks" "macos/build/Release/Ttyrex.app/Contents/Info.plist"
 
       - name: Codesign app bundle
         env:
@@ -1117,15 +1117,15 @@ jobs:
           #     but since they're part of the build, they still need to be
           #     codesigned.
           #   - The binaries in the "Versions" folders need to NOT be symlinks.
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/Frameworks/Sparkle.framework"
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ghostty.app/Contents/PlugIns/DockTilePlugin.plugin"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/Frameworks/Sparkle.framework"
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime "macos/build/Release/Ttyrex.app/Contents/PlugIns/DockTilePlugin.plugin"
 
           # Codesign the app bundle
-          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime --entitlements "macos/Ghostty.entitlements" macos/build/Release/Ghostty.app
+          /usr/bin/codesign --verbose -f -s "$MACOS_CERTIFICATE_NAME" -o runtime --entitlements "macos/Ghostty.entitlements" macos/build/Release/Ttyrex.app
 
       - name: "Notarize app bundle"
         env:
@@ -1144,7 +1144,7 @@ jobs:
           # Therefore, we create a zip file containing our app bundle, so that we can send it to the
           # notarization service
           echo "Creating temp notarization archive"
-          ditto -c -k --keepParent "macos/build/Release/Ghostty.app" "notarization.zip"
+          ditto -c -k --keepParent "macos/build/Release/Ttyrex.app" "notarization.zip"
 
           # Here we send the notarization request to the Apple's Notarization service, waiting for the result.
           # This typically takes a few seconds inside a CI environment, but it might take more depending on the App
@@ -1156,14 +1156,14 @@ jobs:
           # Finally, we need to "attach the staple" to our executable, which will allow our app to be
           # validated by macOS even when an internet connection is not available.
           echo "Attach staple"
-          xcrun stapler staple "macos/build/Release/Ghostty.app"
+          xcrun stapler staple "macos/build/Release/Ttyrex.app"
 
       # Zip up the app
       - name: Zip App
         run: |
           cd macos/build/Release
-          zip -9 -r --symlinks ../../../ghostty-macos-universal-debug-fast.zip Ghostty.app
-          zip -9 -r --symlinks ../../../ghostty-macos-universal-debug-fast-dsym.zip Ghostty.app.dSYM/
+          zip -9 -r --symlinks ../../../ttyrex-macos-universal-debug-fast.zip Ttyrex.app
+          zip -9 -r --symlinks ../../../ttyrex-macos-universal-debug-fast-dsym.zip Ttyrex.app.dSYM/
 
       # Update Release
       - name: Release
@@ -1173,7 +1173,7 @@ jobs:
           prerelease: true
           tag_name: tip
           target_commitish: ${{ github.sha }}
-          files: ghostty-macos-universal-debug-fast.zip
+          files: ttyrex-macos-universal-debug-fast.zip
           token: ${{ secrets.GH_RELEASE_TOKEN }}
 
       # Update Blob Storage
@@ -1181,8 +1181,8 @@ jobs:
         run: |
           mkdir blob
           mkdir -p blob/${GHOSTTY_COMMIT_LONG}
-          cp ghostty-macos-universal-debug-fast.zip blob/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-fast.zip
-          cp ghostty-macos-universal-debug-fast-dsym.zip blob/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-fast-dsym.zip
+          cp ttyrex-macos-universal-debug-fast.zip blob/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-fast.zip
+          cp ttyrex-macos-universal-debug-fast-dsym.zip blob/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-fast-dsym.zip
       - name: Upload to R2
         uses: ryand56/r2-upload-action@33ebb7a494b3a8a3c5ed2ea6bbdc72e707090317 # v1.5
         with:
@@ -1196,5 +1196,5 @@ jobs:
       - name: Echo Release URLs
         run: |
           echo "Release URLs:"
-          echo "  App Bundle: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-fast.zip"
-          echo "  Debug Symbols: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-fast-dsym.zip"
+          echo "  App Bundle: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-fast.zip"
+          echo "  Debug Symbols: https://tip.files.ghostty.org/${GHOSTTY_COMMIT_LONG}/ttyrex-macos-universal-debug-fast-dsym.zip"

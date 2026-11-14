@@ -7,6 +7,9 @@ const global = @import("../global.zig");
 
 const log = std.log.scoped(.config);
 
+// Use the same configuration directory as Ghostty regardless of the bundle ID.
+const macos_config_app_id = "com.mitchellh.ghostty";
+
 /// Default path for the XDG home configuration file. Returned value
 /// must be freed by the caller.
 pub fn defaultXdgPath(alloc: Allocator) ![]const u8 {
@@ -61,13 +64,13 @@ pub fn preferredXdgPath(alloc: Allocator) ![]const u8 {
 /// Default path for the macOS Application Support configuration file.
 /// Returned value must be freed by the caller.
 pub fn defaultAppSupportPath(alloc: Allocator) ![]const u8 {
-    return try internal_os.macos.appSupportDir(alloc, "config.ghostty");
+    return try internal_os.macos.appSupportDir(alloc, macos_config_app_id, "config.ghostty");
 }
 
 /// Ghostty <1.3.0 default path for the macOS Application Support
 /// configuration file. Returned value must be freed by the caller.
 pub fn legacyDefaultAppSupportPath(alloc: Allocator) ![]const u8 {
-    return try internal_os.macos.appSupportDir(alloc, "config");
+    return try internal_os.macos.appSupportDir(alloc, macos_config_app_id, "config");
 }
 
 /// Preferred default path for the macOS Application Support configuration file.
@@ -173,4 +176,25 @@ pub fn open(io: std.Io, path: []const u8) OpenFileError!std.Io.File {
     if (stat.size == 0) return OpenFileError.FileIsEmpty;
 
     return file;
+}
+
+test "macOS configuration keeps the Ghostty Application Support paths" {
+    if (builtin.target.os.tag != .macos) return;
+
+    const alloc = std.testing.allocator;
+    const current = try defaultAppSupportPath(alloc);
+    defer alloc.free(current);
+    const legacy = try legacyDefaultAppSupportPath(alloc);
+    defer alloc.free(legacy);
+
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        current,
+        "/Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+    ));
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        legacy,
+        "/Library/Application Support/com.mitchellh.ghostty/config",
+    ));
 }

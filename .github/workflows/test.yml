@@ -1516,7 +1516,7 @@ jobs:
         run: nix build .#ghostty-${{ matrix.variant.optimize }}
 
       - name: Check version
-        run: result/bin/ghostty +version | grep -q '${{ matrix.variant.version }}'
+        run: result/bin/ttyrex +version | grep -q '${{ matrix.variant.version }}'
 
       - name: Check symbols
         run: nm result/bin/.ghostty-wrapped 2>&1 | grep -q '${{ matrix.variant.symbols }}'
@@ -1820,7 +1820,7 @@ jobs:
       # The native app is built with native Xcode tooling. This also does
       # codesigning. IMPORTANT: this must NOT run in a Nix environment.
       # Nix breaks xcodebuild so this has to be run outside.
-      - name: Build Ghostty.app
+      - name: Build Ttyrex.app
         run: |
           cd macos
           xcodebuild -target Ghostty \

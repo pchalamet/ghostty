@@ -20,6 +20,18 @@ final class GhosttyTitlebarTabsUITests: GhosttyCustomConfigCase {
     }
 
     @MainActor
+    func testAboutTtyrexCreditsGhostty() throws {
+        let app = try ghosttyApplication()
+        app.launch()
+        app.menuBars.menuBarItems["Ttyrex"].click()
+        app.menuItems["About Ttyrex"].click()
+
+        let about = app.windows["About Ttyrex"]
+        XCTAssertTrue(about.waitForExistence(timeout: 5))
+        XCTAssertTrue(about.staticTexts["A terminal emulator forked from Ghostty."].exists)
+    }
+
+    @MainActor
     func testCustomTitlebar() throws {
         let app = try ghosttyApplication()
         app.launch()

@@ -3,7 +3,7 @@ import SwiftUI
 struct AboutView: View {
     @Environment(\.openURL) var openURL
 
-    private let githubURL = URL(string: "https://github.com/ghostty-org/ghostty")
+    private let githubURL = URL(string: "https://github.com/pchalamet/ghostty")
     private let docsURL = URL(string: "https://ghostty.org/docs")
 
     /// Read the commit from the bundle.
@@ -28,16 +28,6 @@ struct AboutView: View {
                 return
             }
             self = .other(version)
-        }
-
-        var url: URL? {
-            switch self {
-            case .stable(let version):
-                let slug = version.replacingOccurrences(of: ".", with: "-")
-                return URL(string: "https://ghostty.org/docs/install/release-notes/\(slug)")
-            default:
-                return nil
-            }
         }
     }
 
@@ -74,14 +64,18 @@ struct AboutView: View {
 
     var body: some View {
         VStack(alignment: .center) {
-            CyclingIconView()
+            Image("AppIconImage")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 128, height: 128)
+                .accessibilityLabel("Ttyrex application icon")
 
             VStack(alignment: .center, spacing: 32) {
                 VStack(alignment: .center, spacing: 8) {
-                    Text("Ghostty")
+                    Text("Ttyrex")
                         .bold()
                         .font(.title)
-                    Text("Fast, native, feature-rich terminal \nemulator pushing modern features.")
+                    Text("A terminal emulator forked from Ghostty.")
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .font(.caption)
@@ -93,7 +87,7 @@ struct AboutView: View {
                 VStack(spacing: 2) {
                     switch versionConfig {
                     case .stable(let version):
-                        PropertyRow(label: "Version", text: version, url: versionConfig.url)
+                        PropertyRow(label: "Version", text: version)
                     case .tip:
                         PropertyRow(label: "Version", text: "Tip Release")
                     case .other(let v):
@@ -113,7 +107,7 @@ struct AboutView: View {
 
                 HStack(spacing: 8) {
                     if let url = docsURL {
-                        Button("Docs") {
+                        Button("Upstream Docs") {
                             openURL(url)
                         }
                     }

@@ -132,7 +132,7 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
         const run = b.addRunArtifact(build_data_exe);
         run.addArg("+fish");
         const wf = b.addWriteFiles();
-        _ = wf.addCopyFile(run.captureStdOut(.{}), "ghostty.fish");
+        _ = wf.addCopyFile(run.captureStdOut(.{}), "ttyrex.fish");
 
         const install_step = b.addInstallDirectory(.{
             .source_dir = wf.getDirectory(),
@@ -147,7 +147,7 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
         const run = b.addRunArtifact(build_data_exe);
         run.addArg("+zsh");
         const wf = b.addWriteFiles();
-        _ = wf.addCopyFile(run.captureStdOut(.{}), "_ghostty");
+        _ = wf.addCopyFile(run.captureStdOut(.{}), "_ttyrex");
 
         const install_step = b.addInstallDirectory(.{
             .source_dir = wf.getDirectory(),
@@ -162,7 +162,7 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
         const run = b.addRunArtifact(build_data_exe);
         run.addArg("+bash");
         const wf = b.addWriteFiles();
-        _ = wf.addCopyFile(run.captureStdOut(.{}), "ghostty.bash");
+        _ = wf.addCopyFile(run.captureStdOut(.{}), "ttyrex.bash");
 
         const install_step = b.addInstallDirectory(.{
             .source_dir = wf.getDirectory(),
@@ -254,7 +254,7 @@ fn addLinuxAppResources(
     // Background:
     // https://developer.gnome.org/documentation/guidelines/maintainer/integrating.html
 
-    const name = b.fmt("Ghostty{s}", .{
+    const name = b.fmt("Ttyrex{s}", .{
         switch (cfg.optimize) {
             .debug, .safe => " (Debug)",
             .fast, .small => "",
@@ -269,7 +269,7 @@ fn addLinuxAppResources(
     });
 
     // How the files below launch Ghostty. See -Dinstalled-exe-path.
-    const exe = cfg.installed_exe_path orelse "ghostty";
+    const exe = cfg.installed_exe_path orelse "ttyrex";
 
     // Variables used by the templates.
     // Fields are nullable since unused fields trigger a build failure.

@@ -93,7 +93,7 @@ in
       "-Dcpu=baseline"
       "-Doptimize=${optimize}"
       "-Dstrip=${lib.boolToString strip}"
-      "-Dinstalled-exe-path=${placeholder "out"}/bin/ghostty"
+      "-Dinstalled-exe-path=${placeholder "out"}/bin/ttyrex"
     ];
 
     outputs = [
@@ -106,7 +106,7 @@ in
     postInstall = ''
       terminfo_src=${
         if stdenv.hostPlatform.isDarwin
-        then ''"$out/Applications/Ghostty.app/Contents/Resources/terminfo"''
+        then ''"$out/Applications/Ttyrex.app/Contents/Resources/terminfo"''
         else "$out/share/terminfo"
       }
 
@@ -179,6 +179,6 @@ in
         "x86_64-linux"
         "aarch64-linux"
       ];
-      mainProgram = "ghostty";
+      mainProgram = "ttyrex";
     };
   })

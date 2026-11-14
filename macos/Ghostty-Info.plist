@@ -19,7 +19,7 @@
 				<string>pl</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
-			<string>AppIcon.icns</string>
+			<string>Ttyrex.icns</string>
 			<key>CFBundleTypeName</key>
 			<string>Terminal scripts</string>
 			<key>CFBundleTypeRole</key>
@@ -106,15 +106,13 @@
 	</array>
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
-	<key>SUPublicEDKey</key>
-	<string>wsNcGf5hirwtdXMVnYoxRIX/SqZQLMOsYlD3q3imeok=</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>com.mitchellh.ghosttySurfaceId</string>
+			<string>com.pchalamet.ttyrexSurfaceId</string>
 			<key>UTTypeDescription</key>
-			<string>Ghostty Surface Identifier</string>
+			<string>Ttyrex Surface Identifier</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

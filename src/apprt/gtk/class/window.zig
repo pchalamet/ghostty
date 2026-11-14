@@ -2016,22 +2016,22 @@ pub const Window = extern struct {
         _: ?*glib.Variant,
         self: *Self,
     ) callconv(.c) void {
-        const name = "Ghostty";
+        const name = "Ttyrex";
         const icon = "com.mitchellh.ghostty";
-        const website = "https://ghostty.org";
+        const website = "https://github.com/pchalamet/ghostty";
 
         adw.showAboutDialog(
             self.as(gtk.Widget),
             "application-name",
             name,
-            "developer-name",
-            i18n._("Ghostty Developers"),
+            "comments",
+            "A terminal emulator forked from Ghostty.",
             "application-icon",
             icon,
             "version",
             build_config.version_string.ptr,
             "issue-url",
-            "https://github.com/ghostty-org/ghostty/issues",
+            "https://github.com/pchalamet/ghostty/issues",
             "website",
             website,
             @as(?*anyopaque, null),

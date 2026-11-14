@@ -90,7 +90,7 @@ so `GHOSTTY_RESOURCES_DIR` environment variable cannot be used.
 Here is an example of `config.nu` with default `GHOSTTY_RESOURCES_DIR` for macOS:
 
 ```nushell
-source /Applications/Ghostty.app/Contents/Resources/ghostty/shell-integration/nushell/vendor/autoload/ghostty.nu
+source /Applications/Ttyrex.app/Contents/Resources/ghostty/shell-integration/nushell/vendor/autoload/ghostty.nu
 use ghostty *
 ```
 

@@ -1,25 +1,18 @@
-<!-- LOGO -->
-<h1>
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/fe853809-ba8b-400b-83ab-a9a0da25be8a" alt="Logo" width="128">
-  <br>Ghostty
-</h1>
-  <p align="center">
-    Fast, native, feature-rich terminal emulator pushing modern features.
-    <br />
-    A native GUI or embeddable library via <code>libghostty</code>.
-    <br />
-    <a href="#about">About</a>
-    ·
-    <a href="https://ghostty.org/download">Download</a>
-    ·
-    <a href="https://ghostty.org/docs">Documentation</a>
-    ·
-    <a href="CONTRIBUTING.md">Contributing</a>
-    ·
-    <a href="HACKING.md">Developing</a>
-  </p>
-</p>
+# Ttyrex
+
+<img src="macos/Assets.xcassets/AppIconImage.imageset/macOS-AppIcon-1024px.png" alt="Ttyrex icon" width="128">
+
+Ttyrex is a terminal emulator forked from [Ghostty](https://github.com/ghostty-org/ghostty).
+The macOS app includes compact tabs, writable scrollback, and the Whitby Bay theme.
+
+Build the release app with `zig build -Doptimize=ReleaseFast`. The macOS
+bundle is `zig-out/Ttyrex.app` and its executable is `ttyrex`.
+On macOS, Ttyrex reads the same configuration as Ghostty at
+`~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`.
+
+## Upstream Ghostty
+
+The sections below describe the upstream project and its resources.
 
 ## About
 
