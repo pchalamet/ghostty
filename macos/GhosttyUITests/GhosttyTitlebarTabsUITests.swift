@@ -32,6 +32,16 @@ final class GhosttyTitlebarTabsUITests: GhosttyCustomConfigCase {
     }
 
     @MainActor
+    func testViewMenuOmitsQuickTerminal() throws {
+        let app = try ghosttyApplication()
+        app.launch()
+        app.menuBars.menuBarItems["View"].click()
+
+        XCTAssertTrue(app.menuItems["Terminal Inspector"].exists)
+        XCTAssertFalse(app.menuItems["Quick Terminal"].exists)
+    }
+
+    @MainActor
     func testCustomTitlebar() throws {
         let app = try ghosttyApplication()
         app.launch()

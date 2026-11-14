@@ -112,8 +112,8 @@ pub const Action = union(Key) {
     /// Toggle whether window directions are shown.
     toggle_window_decorations,
 
-    /// Toggle the quick terminal in or out.
-    toggle_quick_terminal,
+    /// Reserved to preserve the numbering of subsequent C actions.
+    reserved_10,
 
     /// Toggle the command palette.
     toggle_command_palette,
@@ -379,7 +379,7 @@ pub const Action = union(Key) {
         toggle_fullscreen,
         toggle_tab_overview,
         toggle_window_decorations,
-        toggle_quick_terminal,
+        reserved_10,
         toggle_command_palette,
         toggle_visibility,
         toggle_background_opacity,

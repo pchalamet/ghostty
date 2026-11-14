@@ -6,7 +6,6 @@ const Allocator = std.mem.Allocator;
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const ext = wayland.client.ext;
-const kde = wayland.client.kde;
 const org = wayland.client.org;
 const vicinae = wayland.client.vicinae;
 const xdg = wayland.client.xdg;
@@ -31,8 +30,6 @@ pub const Tag = enum {
     compositor,
     ext_background_effect,
     kde_decoration_manager,
-    kde_slide_manager,
-    kde_output_order,
     vicinae_hotkey_manager,
     xdg_activation,
 
@@ -41,8 +38,6 @@ pub const Tag = enum {
             .compositor => wl.Compositor,
             .ext_background_effect => ext.BackgroundEffectManagerV1,
             .kde_decoration_manager => org.KdeKwinServerDecorationManager,
-            .kde_slide_manager => org.KdeKwinSlideManager,
-            .kde_output_order => kde.OutputOrderV1,
             .vicinae_hotkey_manager => vicinae.HotkeyManagerV1,
             .xdg_activation => xdg.ActivationV1,
         };
@@ -50,26 +45,9 @@ pub const Tag = enum {
 };
 
 pub const State = struct {
-    /// Connector name of the primary output (e.g., "DP-1") as reported
-    /// by kde_output_order_v1. The first output in each priority list
-    /// is the primary.
-    primary_output_name: ?[:0]const u8 = null,
-
-    /// Tracks the output order event cycle. Set to true after a `done`
-    /// event so the next `output` event is captured as the new primary.
-    /// Initialized to true so the first event after binding is captured.
-    output_order_done: bool = true,
-
     default_deco_mode: ?org.KdeKwinServerDecorationManager.Mode = null,
 
     bg_effect_capabilities: ext.BackgroundEffectManagerV1.Capability = .{},
-
-    /// Reset cached state derived from kde_output_order_v1.
-    fn resetOutputOrder(self: *State, alloc: Allocator) void {
-        if (self.primary_output_name) |name| alloc.free(name);
-        self.primary_output_name = null;
-        self.output_order_done = true;
-    }
 };
 
 pub fn init(alloc: Allocator, display: *wl.Display) !*Globals {
@@ -87,8 +65,8 @@ pub fn init(alloc: Allocator, display: *wl.Display) !*Globals {
     if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
 
     // Do another roundtrip to process events emitted by globals we bound
-    // during registry discovery (e.g. default decoration mode, output
-    // order). Listeners are installed at bind time in registryListener.
+    // during registry discovery. Listeners are
+    // installed at bind time in registryListener.
     if (self.needs_roundtrip) {
         if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
     }
@@ -96,7 +74,6 @@ pub fn init(alloc: Allocator, display: *wl.Display) !*Globals {
 }
 
 pub fn deinit(self: *Globals) void {
-    if (self.state.primary_output_name) |name| self.alloc.free(name);
     self.alloc.destroy(self);
 }
 
@@ -120,18 +97,6 @@ fn onGlobalAttached(self: *Globals, comptime tag: Tag) void {
             v.setListener(*Globals, decoManagerListener, self);
             self.needs_roundtrip = true;
         },
-        .kde_output_order => {
-            const v = self.get(tag) orelse return;
-            v.setListener(*Globals, outputOrderListener, self);
-            self.needs_roundtrip = true;
-        },
-        else => {},
-    }
-}
-
-fn onGlobalRemoved(self: *Globals, tag: Tag) void {
-    switch (tag) {
-        .kde_output_order => self.state.resetOutputOrder(self.alloc),
         else => {},
     }
 }
@@ -164,7 +129,6 @@ fn registryListener(
                     // If this global was already bound,
                     // then we also need to destroy the old binding.
                     if (self.map.get(tag)) |old| {
-                        self.onGlobalRemoved(tag);
                         old.proxy.destroy();
                     }
 
@@ -184,7 +148,6 @@ fn registryListener(
             var it = self.map.iterator();
             while (it.next()) |kv| {
                 if (kv.value.name != v.name) continue;
-                self.onGlobalRemoved(kv.key);
                 kv.value.proxy.destroy();
                 self.map.remove(kv.key);
             }
@@ -212,44 +175,6 @@ fn decoManagerListener(
     switch (event) {
         .default_mode => |mode| {
             self.state.default_deco_mode = @fromBackingInt(@intCast(mode.mode));
-        },
-    }
-}
-
-fn outputOrderListener(
-    _: *kde.OutputOrderV1,
-    event: kde.OutputOrderV1.Event,
-    self: *Globals,
-) void {
-    switch (event) {
-        .output => |v| {
-            // Only the first output event after a `done` is the new primary.
-            if (!self.state.output_order_done) return;
-            self.state.output_order_done = false;
-
-            const name = std.mem.sliceTo(v.output_name, 0);
-            if (self.state.primary_output_name) |old| self.alloc.free(old);
-
-            if (name.len == 0) {
-                self.state.primary_output_name = null;
-                log.warn("ignoring empty primary output name from kde_output_order_v1", .{});
-            } else {
-                self.state.primary_output_name = self.alloc.dupeSentinel(u8, name, 0) catch |err| {
-                    self.state.primary_output_name = null;
-                    log.warn("failed to allocate primary output name: {}", .{err});
-                    return;
-                };
-                log.debug("primary output: {s}", .{name});
-            }
-        },
-        .done => {
-            if (self.state.output_order_done) {
-                // No output arrived since the previous done. Treat this as
-                // an empty update and drop any stale cached primary.
-                self.state.resetOutputOrder(self.alloc);
-                return;
-            }
-            self.state.output_order_done = true;
         },
     }
 }

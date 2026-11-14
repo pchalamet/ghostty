@@ -164,13 +164,6 @@ pub const App = struct {
     }
 
     pub fn clearGlobalShortcuts(_: *App) void {}
-
-    pub fn supportsQuickTerminal(_: App) bool {
-        log.warn("quick terminal is not yet supported on X11", .{});
-        return false;
-    }
-
-    pub fn initQuickTerminal(_: *App, _: *ApprtWindow) !void {}
 };
 
 pub const Window = struct {

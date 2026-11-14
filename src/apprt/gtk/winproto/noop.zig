@@ -32,11 +32,6 @@ pub const App = struct {
         return null;
     }
 
-    pub fn supportsQuickTerminal(_: App) bool {
-        return false;
-    }
-    pub fn initQuickTerminal(_: *App, _: *ApprtWindow) !void {}
-
     pub fn bindGlobalShortcuts(
         _: *App,
         _: *GlobalShortcuts,

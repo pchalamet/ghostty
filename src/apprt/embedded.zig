@@ -373,7 +373,6 @@ pub const App = struct {
         switch (action) {
             .new_window => return false,
             .new_tab => return false,
-            .toggle_quick_terminal => return false,
         }
     }
 };

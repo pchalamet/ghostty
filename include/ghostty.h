@@ -577,28 +577,6 @@ typedef struct {
   ghostty_config_color_s colors[256];
 } ghostty_config_palette_s;
 
-// config.QuickTerminalSize
-typedef enum {
-  GHOSTTY_QUICK_TERMINAL_SIZE_NONE,
-  GHOSTTY_QUICK_TERMINAL_SIZE_PERCENTAGE,
-  GHOSTTY_QUICK_TERMINAL_SIZE_PIXELS,
-} ghostty_quick_terminal_size_tag_e;
-
-typedef union {
-  float percentage;
-  uint32_t pixels;
-} ghostty_quick_terminal_size_value_u;
-
-typedef struct {
-  ghostty_quick_terminal_size_tag_e tag;
-  ghostty_quick_terminal_size_value_u value;
-} ghostty_quick_terminal_size_s;
-
-typedef struct {
-  ghostty_quick_terminal_size_s primary;
-  ghostty_quick_terminal_size_s secondary;
-} ghostty_config_quick_terminal_size_s;
-
 // config.Fullscreen
 typedef enum {
   GHOSTTY_CONFIG_FULLSCREEN_FALSE,
@@ -980,7 +958,7 @@ typedef enum {
   GHOSTTY_ACTION_TOGGLE_FULLSCREEN,
   GHOSTTY_ACTION_TOGGLE_TAB_OVERVIEW,
   GHOSTTY_ACTION_TOGGLE_WINDOW_DECORATIONS,
-  GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
+  GHOSTTY_ACTION_RESERVED_10,
   GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE,
   GHOSTTY_ACTION_TOGGLE_VISIBILITY,
   GHOSTTY_ACTION_TOGGLE_BACKGROUND_OPACITY,
@@ -1156,7 +1134,6 @@ typedef union {
 typedef enum {
   GHOSTTY_IPC_ACTION_NEW_WINDOW,
   GHOSTTY_IPC_ACTION_NEW_TAB,
-  GHOSTTY_IPC_ACTION_TOGGLE_QUICK_TERMINAL,
 } ghostty_ipc_action_tag_e;
 
 //-------------------------------------------------------------------

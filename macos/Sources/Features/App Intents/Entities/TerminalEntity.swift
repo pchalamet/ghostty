@@ -68,12 +68,7 @@ struct TerminalEntity: AppEntity {
             self.screenshot = nsImage
         }
 
-        // Determine the kind based on the window controller type
-        if view.window?.windowController is QuickTerminalController {
-            self.kind = .quick
-        } else {
-            self.kind = .normal
-        }
+        self.kind = .normal
     }
 
     /// Wait for the surface to be updated then create an entity
@@ -119,15 +114,9 @@ struct TerminalEntity: AppEntity {
         self.title = await title ?? ""
         self.workingDirectory = await pwd ?? ""
 
-        // Wait for the title and pwd then get latest pid and screenshots.
-        // This should gave SurfaceView enough time to layout in the window and we can get the most recent process's PID
-        // Determine the kind based on the window controller type
-        if view.window?.windowController is QuickTerminalController {
-            self.kind = .quick
-        } else {
-            self.kind = .normal
-        }
+        self.kind = .normal
 
+        // Waiting for the title and working directory gives the surface time to lay out.
         self.pid = view.surfaceModel?.foregroundPID
         if let nsImage = ImageRenderer(content: view.screenshot()).nsImage {
             self.screenshot = nsImage
@@ -138,13 +127,11 @@ struct TerminalEntity: AppEntity {
 extension TerminalEntity {
     enum Kind: String, AppEnum {
         case normal
-        case quick
 
         static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Terminal Kind")
 
         static var caseDisplayRepresentations: [Self: DisplayRepresentation] = [
-            .normal: .init(title: "Normal"),
-            .quick: .init(title: "Quick")
+            .normal: .init(title: "Normal")
         ]
     }
 }
@@ -180,8 +167,7 @@ struct TerminalQuery: EntityStringQuery, EnumerableEntityQuery {
 
     @MainActor
     var all: [Ghostty.SurfaceView] {
-        // Find all of our terminal windows. This will include the quick terminal
-        // but only if it was previously opened.
+        // Find all of our terminal windows.
         let controllers = NSApp.windows.compactMap {
             $0.windowController as? BaseTerminalController
         }

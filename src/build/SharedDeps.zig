@@ -807,12 +807,6 @@ fn addGtk(
         scanner.addCustomProtocol(
             plasma_wayland_protocols_dep.path("src/protocols/server-decoration.xml"),
         );
-        scanner.addCustomProtocol(
-            plasma_wayland_protocols_dep.path("src/protocols/slide.xml"),
-        );
-        scanner.addCustomProtocol(
-            plasma_wayland_protocols_dep.path("src/protocols/kde-output-order-v1.xml"),
-        );
         scanner.addSystemProtocol("staging/xdg-activation/xdg-activation-v1.xml");
         scanner.addSystemProtocol("staging/ext-background-effect/ext-background-effect-v1.xml");
         scanner.addCustomProtocol(
@@ -823,8 +817,6 @@ fn addGtk(
         // Only referenced by vicinae_hotkey_manager_v1.bind (nullable arg).
         scanner.generate("wl_seat", 1);
         scanner.generate("org_kde_kwin_server_decoration_manager", 1);
-        scanner.generate("org_kde_kwin_slide_manager", 1);
-        scanner.generate("kde_output_order_v1", 1);
         scanner.generate("xdg_activation_v1", 1);
         scanner.generate("ext_background_effect_manager_v1", 1);
         scanner.generate("vicinae_hotkey_manager_v1", 1);
@@ -836,31 +828,6 @@ fn addGtk(
             "gdk_wayland",
             gobject.module("gdkwayland4"),
         );
-
-        if (b.lazyDependency("gtk4_layer_shell", .{
-            .target = target,
-            .optimize = optimize,
-        })) |gtk4_layer_shell| {
-            const layer_shell_module = gtk4_layer_shell.module("gtk4-layer-shell");
-            layer_shell_module.addImport("gtk", gobject.module("gtk4"));
-            layer_shell_module.addImport("gdk", gobject.module("gdk4"));
-            step.root_module.addImport(
-                "gtk4-layer-shell",
-                layer_shell_module,
-            );
-
-            // IMPORTANT: gtk4-layer-shell must be linked BEFORE
-            // wayland-client, as it relies on shimming libwayland's APIs.
-            if (b.systemIntegrationOption("gtk4-layer-shell", .{})) {
-                step.root_module.linkSystemLibrary("gtk4-layer-shell-0", dynamic_link_opts);
-            } else {
-                // gtk4-layer-shell *must* be dynamically linked,
-                // so we don't add it as a static library
-                const shared_lib = gtk4_layer_shell.artifact("gtk4-layer-shell");
-                b.installArtifact(shared_lib);
-                step.root_module.linkLibrary(shared_lib);
-            }
-        }
 
         step.root_module.linkSystemLibrary("wayland-client", dynamic_link_opts);
     }

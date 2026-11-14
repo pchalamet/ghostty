@@ -788,6 +788,7 @@ pub const Application = extern struct {
 
             .show_child_exited => return Action.showChildExited(target, value),
 
+            .reserved_10 => return false,
             .show_gtk_inspector => Action.showGtkInspector(),
 
             .size_limit => return Action.sizeLimit(target, value),
@@ -796,7 +797,6 @@ pub const Application = extern struct {
 
             .toggle_maximize => Action.toggleMaximize(target),
             .toggle_fullscreen => Action.toggleFullscreen(target),
-            .toggle_quick_terminal => return Action.toggleQuickTerminal(self),
             .toggle_tab_overview => return Action.toggleTabOverview(target),
             .toggle_window_decorations => return Action.toggleWindowDecorations(target),
             .toggle_command_palette => return Action.toggleCommandPalette(target),
@@ -1492,7 +1492,6 @@ pub const Application = extern struct {
             .init("present-surface", actionPresentSurface, t_variant_type),
             .init("quit", actionQuit, null),
             .init("reload-config", actionReloadConfig, null),
-            .init("toggle-quick-terminal", actionToggleQuickTerminal, null),
             .init("ring-bell", actionRingBell, null),
         };
 
@@ -1790,17 +1789,6 @@ pub const Application = extern struct {
         const priv = self.private();
         priv.core_app.performAction(self.rt(), .reload_config) catch |err| {
             log.warn("error reloading config err={}", .{err});
-        };
-    }
-
-    fn actionToggleQuickTerminal(
-        _: *gio.SimpleAction,
-        _: ?*glib.Variant,
-        self: *Self,
-    ) callconv(.c) void {
-        const priv = self.private();
-        priv.core_app.performAction(self.rt(), .toggle_quick_terminal) catch |err| {
-            log.warn("error toggling quick terminal err={}", .{err});
         };
     }
 
@@ -3103,28 +3091,6 @@ const Action = struct {
         }
     }
 
-    pub fn toggleQuickTerminal(self: *Application) bool {
-        // If we already have a quick terminal window, we just toggle the
-        // visibility of it.
-        if (getQuickTerminalWindow()) |win| {
-            win.toggleVisibility();
-            return true;
-        }
-
-        // If we don't support quick terminals then we do nothing.
-        const priv = self.private();
-        if (!priv.winproto.supportsQuickTerminal()) return false;
-
-        // Create our new window as a quick terminal
-        const win = gobject.ext.newInstance(Window, .{
-            .application = self,
-            .@"quick-terminal" = true,
-        });
-        assert(win.isQuickTerminal());
-        initAndShowWindow(self, win, null, .none);
-        return true;
-    }
-
     pub fn toggleSplitZoom(target: apprt.Target) bool {
         switch (target) {
             .app => {
@@ -3165,26 +3131,6 @@ const Action = struct {
             // environments this doesn't matter.
             .surface => |v| return v.rt_surface.surface.showOnScreenKeyboard(null),
         }
-    }
-
-    fn getQuickTerminalWindow() ?*Window {
-        // Find a quick terminal window.
-        const list = gtk.Window.listToplevels();
-        defer list.free();
-        if (ext.listFind(gtk.Window, list, struct {
-            fn find(gtk_win: *gtk.Window) bool {
-                const win = gobject.ext.cast(
-                    Window,
-                    gtk_win,
-                ) orelse return false;
-                return win.isQuickTerminal();
-            }
-        }.find)) |w| return gobject.ext.cast(
-            Window,
-            w,
-        ).?;
-
-        return null;
     }
 
     pub fn toggleMaximize(target: apprt.Target) void {
