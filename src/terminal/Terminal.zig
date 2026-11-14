@@ -293,7 +293,6 @@ pub const Options = struct {
     /// standard page and only complete historical pages are pruned.
     max_scrollback_lines: ?usize = null,
 
-    /// Allow relative cursor motion into retained primary-screen rows.
     colors: Colors = .default,
 
     /// The default mode state. When the terminal gets a reset, it
@@ -2459,9 +2458,12 @@ fn printWrap(self: *Terminal) !void {
     // We only mark that we soft-wrapped if we're at the edge of our
     // full screen. We don't mark the row as wrapped if we're in the
     // middle due to a right margin.
-    const cursor: *Screen.Cursor = &self.screens.active.cursor;
+    const screen = self.screens.active;
+    const cursor: *Screen.Cursor = &screen.cursor;
     const mark_wrap = cursor.x == self.cols - 1;
-    if (mark_wrap) cursor.page_row.wrap = true;
+    const replacing = cursor.replacing_line and self.logicalLineEditing() and mark_wrap;
+    const insert = replacing and cursor.page_pin.down(1) != null;
+    if (mark_wrap and !insert) cursor.page_row.wrap = true;
 
     // Get the old semantic prompt so we can extend it to the next
     // line. We need to do this before we index() because we may
@@ -2470,8 +2472,23 @@ fn printWrap(self: *Terminal) !void {
     const old_semantic_clear = cursor.semantic_content_clear_eol;
 
     // Move to the next line
-    try self.index();
-    self.screens.active.cursorHorizontalAbsolute(self.scrolling_region.left);
+    if (insert) {
+        screen.insertContinuation() catch |err| {
+            // A wide glyph can already have installed a spacer at the edge.
+            // Clear it if we could not add its continuation row.
+            if (err != error.CursorEvicted) screen.cursorResetWrap();
+            return err;
+        };
+        const previous = cursor.page_pin.up(1).?;
+        const row = previous.rowAndCell().row;
+        row.wrap = true;
+        row.dirty = true;
+        self.flags.dirty.clear = true;
+    } else {
+        try self.index();
+    }
+    cursor.replacing_line = replacing;
+    screen.cursorHorizontalAbsolute(self.scrolling_region.left);
 
     // Our pointer should never move
     assert(cursor == &self.screens.active.cursor);
@@ -2551,6 +2568,12 @@ pub fn cursorUp(self: *Terminal, count_req: usize) void {
     // Always resets pending wrap
     const screen = self.screens.active;
     screen.cursor.pending_wrap = false;
+    screen.cursor.replacing_line = false;
+
+    if (self.logicalLineEditing()) {
+        self.moveLogicalLines(.up, @max(count_req, 1));
+        return;
+    }
 
     if (screen.cursor.in_scrollback or
         (!screen.no_scrollback and
@@ -2587,6 +2610,12 @@ pub fn cursorDown(self: *Terminal, count_req: usize) void {
     // Always resets pending wrap
     const screen = self.screens.active;
     screen.cursor.pending_wrap = false;
+    screen.cursor.replacing_line = false;
+
+    if (self.logicalLineEditing()) {
+        self.moveLogicalLines(.down, @max(count_req, 1));
+        return;
+    }
 
     if (screen.cursor.in_scrollback) {
         self.cursorDownFromScrollback(@max(count_req, 1), self.scrolling_region.bottom);
@@ -2600,6 +2629,43 @@ pub fn cursorDown(self: *Terminal, count_req: usize) void {
         self.rows - self.screens.active.cursor.y - 1;
     const count = @min(max, @max(count_req, 1));
     self.screens.active.cursorDown(@intCast(count));
+}
+
+/// Full-screen line editing is independent of restricted VT scroll regions.
+fn logicalLineEditing(self: *const Terminal) bool {
+    const screen = self.screens.active;
+    return self.screens.active_key == .primary and
+        // Shell editors redraw prompts and input using physical rows.
+        screen.cursor.semantic_content == .output and
+        !self.modes.get(.origin) and self.scrolling_region.top == 0 and
+        self.scrolling_region.bottom == self.rows - 1 and
+        self.scrolling_region.left == 0 and self.scrolling_region.right == self.cols - 1;
+}
+
+fn moveLogicalLines(self: *Terminal, direction: enum { up, down }, count: usize) void {
+    const screen = self.screens.active;
+    const allow_history = !screen.no_scrollback;
+    const top = screen.pages.getTopLeft(if (allow_history)
+        .screen
+    else
+        .active);
+    var row = screen.cursor.page_pin.*;
+    row.x = 0;
+    if (screen.cursor.in_scrollback and !allow_history) row = top;
+    const limit = if (direction == .up) top else null;
+    var rows = row.rowIterator(if (direction == .up) .left_up else .right_down, limit);
+    _ = rows.next(); // The current row is the starting point.
+
+    var remaining = count;
+    if (direction == .up and row.rowAndCell().row.wrap_continuation) remaining +|= 1;
+    while (rows.next()) |next| {
+        if (next.rowAndCell().row.wrap_continuation and !next.eql(top)) continue;
+        row = next;
+        remaining -= 1;
+        if (remaining == 0) break;
+    }
+    row.x = screen.cursor.x;
+    screen.cursorToPin(row);
 }
 
 fn cursorDownFromScrollback(self: *Terminal, count: usize, bottom: size.CellCountInt) void {
@@ -2769,6 +2835,7 @@ pub fn saveCursor(self: *Terminal) void {
 /// The primary and alternate screen have distinct save state.
 /// If no save was done before values are reset to their initial values.
 pub fn restoreCursor(self: *Terminal) void {
+    self.screens.active.cursor.replacing_line = false;
     const saved: Screen.SavedCursor = self.screens.active.saved_cursor orelse .{
         .x = 0,
         .y = 0,
@@ -3084,6 +3151,7 @@ pub fn index(self: *Terminal) !void {
 
     // Unset pending wrap state
     screen.cursor.pending_wrap = false;
+    screen.cursor.replacing_line = false;
 
     // We handle our cursor semantic prompt state AFTER doing the
     // scrolling, because we may need to apply to new rows.
@@ -3307,6 +3375,7 @@ pub fn reverseIndex(self: *Terminal) void {
 /// greater than the bottom-most row it is adjusted to the bottom-most
 /// row.
 pub fn setCursorPos(self: *Terminal, row_req: usize, col_req: usize) void {
+    self.screens.active.cursor.replacing_line = false;
     // If cursor origin mode is set the cursor row will be moved relative to
     // the top margin row and adjusted to be above or at bottom-most row in
     // the current scroll region.
@@ -3388,6 +3457,7 @@ pub fn setCursorCol(self: *Terminal, col: usize) void {
 /// cursorDown, this stops only at the bottom of the screen, or of the
 /// scrolling region in origin mode.
 pub fn cursorRowRelative(self: *Terminal, count: usize) void {
+    self.screens.active.cursor.replacing_line = false;
     if (self.screens.active.cursor.in_scrollback) {
         self.screens.active.cursor.pending_wrap = false;
         self.cursorDownFromScrollback(count, self.rows - 1);
@@ -4430,12 +4500,70 @@ pub fn eraseChars(self: *Terminal, count_req: usize) void {
     );
 }
 
+/// Clear the logical line and remove its old continuation rows.
+fn eraseLogicalLine(self: *Terminal) void {
+    const screen = self.screens.active;
+    const x = screen.cursor.x;
+    var start = screen.cursor.page_pin.*;
+    start.x = 0;
+    const allow_history = !screen.no_scrollback;
+    if (screen.cursor.in_scrollback and !allow_history) return;
+    const top = screen.pages.getTopLeft(if (allow_history)
+        .screen
+    else
+        .active);
+    while (!start.eql(top) and start.rowAndCell().row.wrap_continuation) {
+        start = start.up(1) orelse break;
+    }
+    var end = start;
+    var continuations: usize = 0;
+    while (end.down(1)) |next| {
+        if (!next.rowAndCell().row.wrap_continuation) break;
+        end = next;
+        continuations += 1;
+    }
+
+    screen.cursorToPin(start);
+    screen.cursor.pending_wrap = false;
+    // If the edit starts at the active boundary, a wrapped prefix can
+    // still live in history. Sever the wrap before clearing active rows.
+    if (screen.cursor.page_row.wrap_continuation) {
+        if (start.up(1)) |prev| {
+            const rac = prev.rowAndCell();
+            rac.row.wrap = false;
+            rac.row.dirty = true;
+            const cells = prev.cells(.all);
+            if (cells[cells.len - 1].wide == .spacer_head) cells[cells.len - 1].wide = .narrow;
+        }
+    }
+    screen.clearRowsIterator(start.pageIterator(.right_down, end), false);
+    for (0..continuations) |_| {
+        screen.pages.removeRowAfter(start) catch |err| {
+            log.warn("could not remove erased line continuation: {}", .{err});
+            break;
+        };
+    }
+    // Removing rows can move the boundary of the active screen.
+    screen.cursorToPin(start);
+    screen.cursorHorizontalAbsolute(x);
+    screen.cursor.replacing_line = true;
+    screen.scrollback_revision +%= 1;
+    if (continuations > 0) self.flags.dirty.clear = true;
+    if (comptime build_options.kitty_graphics) screen.kitty_images.markDirty();
+}
+
 /// Erase the line.
 pub fn eraseLine(
     self: *Terminal,
     mode: csi.EraseLine,
     protected_req: bool,
 ) void {
+    if (mode == .complete and self.logicalLineEditing() and
+        !protected_req and self.screens.active.protected_mode != .iso)
+    {
+        self.eraseLogicalLine();
+        return;
+    }
     self.screens.active.noteScrollbackEdit();
     // Get our start/end positions depending on mode.
     const start, const end = switch (mode) {
@@ -12389,6 +12517,70 @@ test "Terminal: writable scrollback Terrabuild refresh while scrolled back" {
     try testing.expect(std.mem.startsWith(u8, rendered.written(), "task 1 done"));
 }
 
+test "Terminal: logical line editing Terrabuild redraw across resizes" {
+    const alloc = testing.allocator;
+    for ([_]size.CellCountInt{ 3, 12 }) |rows| {
+        var t = try init(testing.io, alloc, .{
+            .rows = rows,
+            .cols = 32,
+        });
+        defer t.deinit(alloc);
+        var stream = t.vtStream();
+        defer stream.deinit();
+        stream.nextSlice("before\r\nA:abcdefghijkl\r\nB:mnopqrstuvwx\r\n\x1b7");
+        if (rows == 3) t.scrollViewport(.top);
+        for ([_]size.CellCountInt{ 9, 25, 6, 32 }) |cols| {
+            try t.resize(alloc, .{ .cols = cols, .rows = t.rows });
+            stream.nextSlice("\x1b8\x1b[?2026h\r\x1b[1A\x1b[2KB:MNOPQRSTUVWXYZ0123" ++
+                "\r\x1b[1A\x1b[2KA:OK\r\x1b[2B\x1b[?2026l\x1b7");
+            const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
+            defer alloc.free(contents);
+            try testing.expectEqualStrings("before\nA:OK\nB:MNOPQRSTUVWXYZ0123", contents);
+            const anchor = t.screens.active.cursor.page_pin.*;
+            try testing.expect(!Cell.hasTextAny(anchor.cells(.all)));
+            try testing.expect(!t.screens.active.cursor.page_row.wrap_continuation);
+            try testing.expectEqual(@as(u21, '3'), blk: {
+                const previous = anchor.up(1).?;
+                const cells = previous.cells(.all);
+                for (0..cells.len) |offset| {
+                    const cell = cells[cells.len - 1 - offset];
+                    if (cell.hasText()) break :blk cell.codepoint();
+                }
+                break :blk 0;
+            });
+            if (rows == 3) try testing.expectEqual(.top, std.meta.activeTag(t.screens.active.pages.viewport));
+        }
+    }
+}
+
+test "Terminal: logical line editing replaces a line across page boundaries" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{
+        .rows = 3,
+        .cols = 5,
+        .max_scrollback_bytes = null,
+    });
+    defer t.deinit(alloc);
+    const screen = t.screens.active;
+    const page_rows = screen.pages.pages.first.?.capacity().rows;
+    for (0..page_rows - 1) |_| try t.linefeed();
+    var stream = t.vtStream();
+    defer stream.deinit();
+    stream.nextSlice("abcde12345\r\nnext\r\n\x1b7");
+    t.scrollViewport(.{ .row = page_rows - 1 });
+    stream.nextSlice("\r\x1b[2A\x1b[2K\x1b[32mabcd界Z\r\x1b[2B");
+    var contents: std.Io.Writer.Allocating = .init(alloc);
+    defer contents.deinit();
+    const start: point.Point = .{ .screen = .{ .y = page_rows - 1 } };
+    try screen.dumpString(&contents.writer, .{ .tl = screen.pages.pin(start).? });
+    try testing.expectEqualStrings("abcd界Z\nnext", contents.written());
+    try testing.expect(!Cell.hasTextAny(screen.cursor.page_pin.cells(.all)));
+    stream.nextSlice("\x1b8\r\x1b[2A\x1b[2Kok\r\x1b[2B");
+    contents.clearRetainingCapacity();
+    try screen.dumpString(&contents.writer, .{ .tl = screen.pages.pin(start).? });
+    try testing.expectEqualStrings("ok\nnext", contents.written());
+}
+
 test "Terminal: writable scrollback cursor survives resizing and eviction" {
     const alloc = testing.allocator;
     var t = try init(testing.io, alloc, .{
@@ -15965,7 +16157,7 @@ test "Terminal: eraseLine complete preserves background sgr" {
     }
 }
 
-test "Terminal: eraseLine complete resets wrap" {
+test "Terminal: eraseLine complete clears soft-wrapped output" {
     const alloc = testing.allocator;
     const io_impl = testing.io;
     var t = try init(io_impl, alloc, .{ .rows = 5, .cols = 5 });
@@ -15990,7 +16182,7 @@ test "Terminal: eraseLine complete resets wrap" {
     {
         const str = try t.plainString(testing.allocator);
         defer testing.allocator.free(str);
-        try testing.expectEqualStrings("X\n123", str);
+        try testing.expectEqualStrings("X", str);
     }
 }
 
@@ -18944,8 +19136,7 @@ test "Terminal: resize prompt redraw clears prompts that reflow splits or joins"
         "\x1b]133;A;redraw=last;cl=line\x07" ++ "first" ++ "\r\n" ++
         "\x1b]133;P;k=s\x07" ++ "abcdefghij";
 
-    // The same, but the input wrapped, so the cursor's row continues a
-    // row that bash won't redraw.
+    // The last logical prompt line already has a soft-wrapped continuation.
     const bash_wrapped = "out\r\n" ++
         "\x1b]133;A;redraw=last;cl=line\x07" ++ "first" ++ "\r\n" ++
         "\x1b]133;P;k=s\x07" ++ "abcdefghijklmno";
@@ -18967,12 +19158,9 @@ test "Terminal: resize prompt redraw clears prompts that reflow splits or joins"
         .{ .input = one_line, .cols = 30, .new_cols = 8, .text = "out", .x = 7, .y = 1 },
         .{ .input = one_line, .cols = 30, .new_cols = 40, .text = "out", .x = 20, .y = 1 },
         .{ .input = bash, .cols = 12, .new_cols = 6, .text = "out\nfirst", .x = 5, .y = 2 },
-        .{ .input = bash_wrapped, .cols = 12, .new_cols = 20, .text = "out\nfirst\nabcdefghijkl", .x = 3, .y = 3 },
-
-        // The wrapped line above the cursor now takes one more row. Reflow
-        // keeps the same number of rows below the cursor, so the top row
-        // moves into scrollback.
-        .{ .input = bash_wrapped, .cols = 12, .new_cols = 6, .text = "out\nfirst\nabcdef\nghijkl", .x = 3, .y = 3 },
+        // Both rows of the last logical prompt line are reserved for redraw.
+        .{ .input = bash_wrapped, .cols = 12, .new_cols = 20, .text = "out\nfirst", .x = 3, .y = 3 },
+        .{ .input = bash_wrapped, .cols = 12, .new_cols = 6, .text = "out\nfirst", .x = 3, .y = 3 },
     };
 
     for (cases) |case| {
@@ -18991,6 +19179,53 @@ test "Terminal: resize prompt redraw clears prompts that reflow splits or joins"
         try testing.expectEqualStrings(case.text, str);
         try testing.expectEqual(case.x, t.screens.active.cursor.x);
         try testing.expectEqual(case.y, t.screens.active.cursor.y);
+    }
+}
+
+test "Terminal: logical line editing preserves Bash prompt redraw rows" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{
+        .cols = 12,
+        .rows = 12,
+    });
+    defer t.deinit(alloc);
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    const prompt = "host:~/src/matis-next (main) >";
+    const draw = "\x1b]133;P;k=i\x07" ++ prompt ++ "\x1b]133;B\x07";
+    stream.nextSlice("build done\r\n\x1b]133;A;redraw=last\x07" ++ draw);
+
+    // Bash clears each old screen row from bottom to top on SIGWINCH.
+    try t.resize(alloc, .{ .cols = 80, .rows = 12 });
+    stream.nextSlice("\r\x1b[K\r\x1b[A\x1b[K\r\x1b[A\x1b[K\r" ++ draw);
+
+    const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
+    defer alloc.free(contents);
+    try testing.expectEqualStrings("build done\n" ++ prompt, contents);
+    try testing.expectEqual(1, t.screens.active.cursor.y);
+}
+
+test "Terminal: logical line editing clears a wrapped prompt below the cursor" {
+    const alloc = testing.allocator;
+    for ([_]size.CellCountInt{ 12, 80 }) |new_cols| {
+        var t = try init(testing.io, alloc, .{
+            .cols = 12,
+            .rows = 10,
+        });
+        defer t.deinit(alloc);
+        var stream = t.vtStream();
+        defer stream.deinit();
+
+        // Move the shell's input cursor above the old wrapped suffix.
+        stream.nextSlice("build done\r\n\x1b]133;A;redraw=last\x07" ++
+            "host:~/src/matis-next (main) >\x1b]133;B\x07\x1b[2;1H");
+        try t.resize(alloc, .{ .cols = new_cols, .rows = 8 });
+        stream.nextSlice("\r\x1b[K\x1b]133;P;k=i\x07host >\x1b]133;B\x07");
+
+        const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings("build done\nhost >", contents);
     }
 }
 

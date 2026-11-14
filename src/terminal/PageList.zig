@@ -1310,6 +1310,8 @@ pub const Resize = struct {
         pub const Extent = enum {
             /// Only the row of `start`.
             row,
+            /// The logical line beginning at `start`, including soft wraps.
+            logical_line,
 
             /// The row of `start` and every row below it.
             to_bottom,
@@ -1566,9 +1568,11 @@ fn resizeCols(
             }
 
             if (blanking) {
+                const wraps = row.rowAndCell().row.wrap;
                 try reflow_cursor.reflowBlankRow(self, row);
                 switch (opts.blank.?.extent) {
                     .row => blanking = false,
+                    .logical_line => blanking = wraps,
                     .to_bottom => {},
                 }
             } else try reflow_cursor.reflowRow(
@@ -3941,6 +3945,95 @@ pub const SplitError = error{
     OutOfSpace,
 };
 
+/// Insert a blank row below a live row, preserving the rows that follow it.
+pub fn insertRowAfter(self: *PageList, p: Pin) SplitError!void {
+    defer self.assertIntegrity();
+    self.pauseIntegrityChecks(true);
+    defer self.pauseIntegrityChecks(false);
+    self.viewport_pin_row_offset = null;
+    try self.insertBlankAfter(p);
+
+    // Use any untracked blank padding at the bottom before growing history.
+    if (self.total_rows > self.rows and p.down(2) != null) {
+        self.total_rows -= self.trimTrailingBlankRows(1);
+    }
+    self.limits.enforce(self, .bytes, .reclaim);
+    self.limits.enforce(self, .lines, .reclaim);
+    self.fixupViewport(0);
+}
+
+fn insertBlankAfter(self: *PageList, p: Pin) SplitError!void {
+    const node = p.node;
+    const at = p.y + 1;
+    if (node.rows() < node.capacity().rows) {
+        const page = node.page();
+        page.size.rows += 1;
+        if (at < node.rows() - 1) {
+            const rows = page.rows.ptr(page.memory);
+            fastmem.rotateOnceR(Row, rows[at..node.rows()]);
+            self.invalidateNodeLayout(node);
+            for (self.tracked_pins.keys()) |tracked| {
+                if (tracked.node == node and tracked.y >= at) tracked.y += 1;
+            }
+        }
+        page.dirty = true;
+    } else if (at < node.rows()) {
+        // Split below p so its node and row stay valid. The split leaves
+        // capacity for the new row at the end of the original page.
+        try self.split(.{ .node = node, .y = at });
+        const page = node.page();
+        page.size.rows += 1;
+        page.dirty = true;
+    } else {
+        const added = try self.createPage(.{ .cap = initialCapacity(self.cols) });
+        added.page().size.rows = 1;
+        self.pages.insertAfter(node, added);
+    }
+    self.total_rows += 1;
+    self.page_compression.markActivity();
+}
+
+/// Remove the following row. Pins on that row are remapped to its predecessor.
+pub fn removeRowAfter(self: *PageList, start: Pin) SplitError!void {
+    // Keep enough backing rows for the viewport. Allocate before modifying
+    // the erased row so an allocation failure leaves its contents intact.
+    if (self.total_rows == self.rows) {
+        try self.insertBlankAfter(self.getBottomRight(.active).?);
+    }
+
+    const p = start.down(1).?;
+    for (self.tracked_pins.keys()) |tracked| {
+        if (tracked.node != p.node) continue;
+        if (tracked.y == p.y) {
+            const x = tracked.x;
+            const garbage = tracked.garbage;
+            tracked.* = start;
+            tracked.x = x;
+            tracked.garbage = garbage or tracked != self.viewport_pin;
+        } else if (tracked.y > p.y) {
+            tracked.y -= 1;
+        }
+    }
+
+    if (p.node.rows() == 1) {
+        self.pages.remove(p.node);
+        self.destroyNode(p.node);
+    } else {
+        const page = p.node.page();
+        const rows = page.rows.ptr(page.memory);
+        page.resetRow(&rows[p.y]);
+        fastmem.rotateOnce(Row, rows[p.y..p.node.rows()]);
+        page.size.rows -= 1;
+        page.dirty = true;
+        self.invalidateNodeLayout(p.node);
+    }
+    self.total_rows -= 1;
+    self.viewport_pin_row_offset = null;
+    self.page_compression.markActivity();
+    self.fixupViewport(0);
+    self.assertIntegrity();
+}
+
 /// Split the given node in the PageList at the given pin.
 ///
 /// The row at the pin and after will be moved into a new page with
@@ -5279,8 +5372,7 @@ const CreatePage = struct {
     exact_size: bool = false,
 };
 
-/// Create a new page node. This does not add it to the list and this
-/// does not do any memory size accounting with max_size/page_size.
+/// Create a new page node and account for its memory without linking it.
 inline fn createPage(
     self: *PageList,
     opts: CreatePage,
