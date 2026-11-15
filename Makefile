@@ -2,6 +2,14 @@ init:
 	@echo You probably want to run "zig build" instead.
 .PHONY: init
 
+# Build an optimized Apple Silicon app at zig-out/Ttyrex.app.
+release:
+	@test "$$(uname -s)" = Darwin && test "$$(uname -m)" = arm64 || \
+		{ echo "release requires an arm64 macOS host" >&2; exit 1; }
+	zig build -Doptimize=ReleaseFast -Dtarget=aarch64-macos \
+		-Dxcframework-target=native -Demit-macos-app=true
+.PHONY: release
+
 # glad updates the GLAD loader. To use this, place the generated glad.zip
 # in this directory next to the Makefile, remove vendor/glad and run this target.
 #
