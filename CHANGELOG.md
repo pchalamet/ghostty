@@ -44,6 +44,9 @@ Changes on Ttyrex’s `main` branch since it forked from Ghostty at `6d9577708`.
 
 ### Branding and configuration
 
+- Shell integration no longer overrides the cursor style by default, so shell
+  prompts preserve `cursor-style`, which defaults to `block`. Set
+  `shell-integration-features = cursor` to opt in to a bar cursor at the prompt.
 - Rebranded the app as Ttyrex with a dinosaur terminal icon and a `ttyrex`
   executable. The About dialog and README credit Ghostty. Launchers, shell
   completions, build artifacts, and package metadata use the Ttyrex name

@@ -242,6 +242,15 @@ test "setup features" {
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    // Defaults preserve the cursor style while keeping path and title integration.
+    {
+        var env = EnvMap.init(alloc);
+        defer env.deinit();
+
+        try setupFeatures(&env, .{}, true);
+        try testing.expectEqualStrings("path,title", env.get("GHOSTTY_SHELL_FEATURES").?);
+    }
+
     // Test: all features enabled
     {
         var env = EnvMap.init(alloc);

@@ -872,10 +872,9 @@ palette: Palette = .{},
 /// still request an explicit cursor style using escape sequences (such as `CSI
 /// q`). Shell configurations will often request specific cursor styles.
 ///
-/// Note that shell integration will automatically set the cursor to a bar at
-/// a prompt, regardless of this configuration. You can disable that behavior
-/// by specifying `shell-integration-features = no-cursor` or disabling shell
-/// integration entirely.
+/// Shell integration preserves this style by default. Enabling
+/// `shell-integration-features = cursor` sets the cursor to a bar at a prompt,
+/// regardless of this configuration.
 ///
 /// Valid values are:
 ///
@@ -2785,7 +2784,8 @@ else
 ///
 /// Available features:
 ///
-///   * `cursor` - Set the cursor to a bar at the prompt.
+///   * `cursor` - Set the cursor to a bar at the prompt. Disabled by default
+///     so prompts preserve the configured cursor style.
 ///
 ///   * `sudo` - Set sudo wrapper to preserve terminfo.
 ///
@@ -8743,7 +8743,7 @@ pub const ShellIntegration = enum {
 
 /// Shell integration features
 pub const ShellIntegrationFeatures = packed struct {
-    cursor: bool = true,
+    cursor: bool = false,
     sudo: bool = false,
     title: bool = true,
     @"ssh-env": bool = false,
