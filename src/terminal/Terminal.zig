@@ -2498,7 +2498,10 @@ fn printWrap(self: *Terminal) !void {
     cursor.semantic_content_clear_eol = old_semantic_clear;
     switch (old_semantic) {
         .output, .input => {},
-        .prompt => cursor.page_row.semantic_prompt = .prompt_continuation,
+        .prompt => {
+            cursor.page_row.semantic_prompt = .prompt_continuation;
+            cursor.page_row.prompt_redraw_continuation = false;
+        },
     }
 
     if (mark_wrap) {
@@ -3020,6 +3023,7 @@ pub fn semanticPrompt(
                 self.screens.active.cursor.x == 0)
             {
                 self.screens.active.cursor.page_row.semantic_prompt = .none;
+                self.screens.active.cursor.page_row.prompt_redraw_continuation = false;
             }
         },
 
@@ -3176,6 +3180,7 @@ pub fn index(self: *Terminal) !void {
             // type later and outputs something. We handle that in the
             // semanticPrompt function.
             screen.cursor.page_row.semantic_prompt = .prompt_continuation;
+            screen.cursor.page_row.prompt_redraw_continuation = screen.cursor.semantic_content == .prompt;
         }
     } else {
         // This should never be set in the output mode.
@@ -19204,6 +19209,84 @@ test "Terminal: logical line editing preserves Bash prompt redraw rows" {
     defer alloc.free(contents);
     try testing.expectEqualStrings("build done\n" ++ prompt, contents);
     try testing.expectEqual(1, t.screens.active.cursor.y);
+}
+
+test "Terminal: rapid resizing does not leave Bash prompt fragments" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 40, .rows = 2 });
+    defer t.deinit(alloc);
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    const new_prompt = "\x1b]133;A;redraw=last\x07";
+    const prompt_begin = "\x1b]133;P;k=i\x07";
+    const prompt_end = "\x1b]133;B\x07";
+    const prompt_prefix = " PROMPT-unique ~/src/project/";
+    const prompt_suffix = "path/very-long-prompt >";
+    const prompt = prompt_prefix ++ prompt_suffix;
+    const draw = prompt_begin ++ prompt ++ prompt_end;
+
+    stream.nextSlice("BUILD-DONE\r\n" ++ new_prompt ++ draw);
+    try t.resize(alloc, .{ .cols = 24, .rows = 2 });
+
+    // At very small sizes Readline may clear the screen and print a hard
+    // newline inside the same marked prompt.
+    stream.nextSlice("\r\x1b[K\r\x1b[H\x1b[2J" ++
+        prompt_begin ++ prompt_prefix ++ "\r\n\r" ++ prompt_suffix ++ prompt_end);
+    try t.resize(alloc, .{ .cols = 150, .rows = 40 });
+    stream.nextSlice("\r\x1b[K\r" ++ draw);
+
+    // An empty command advances to a new prompt.
+    stream.nextSlice("\r\n\x1b]133;D;0\x07" ++ new_prompt ++ draw);
+    const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
+    defer alloc.free(contents);
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    var nonempty: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try testing.expectEqualStrings(if (nonempty == 0) "BUILD-DONE" else prompt, line);
+        nonempty += 1;
+    }
+    try testing.expectEqual(3, nonempty);
+}
+
+test "Terminal: resizing preserves a Bash prompt during redraw" {
+    const alloc = testing.allocator;
+    const prompt_start = "\x1b]133;P;k=i\x07";
+    const prompt_prefix = "\x1b[48;2;82;127;163mhost\x1b[0m\xee\x82\xb0";
+    const prompt_suffix = "~/src/project (main) >\x1b]133;B\x07";
+    const output = "build done\n1\n2\n3\n4\n5\n";
+
+    for ([_]struct {
+        old_cols: size.CellCountInt = 80,
+        cols: size.CellCountInt,
+        rows: size.CellCountInt = 6,
+    }{
+        .{ .cols = 80, .rows = 3 },
+        .{ .cols = 80, .rows = 9 },
+        .{ .cols = 40 },
+        .{ .cols = 100 },
+        .{ .cols = 5 },
+        .{ .cols = 4 },
+        .{ .old_cols = 4, .cols = 80 },
+    }) |case| {
+        var t = try init(testing.io, alloc, .{ .cols = case.old_cols, .rows = 6 });
+        defer t.deinit(alloc);
+        var stream = t.vtStream();
+        defer stream.deinit();
+        stream.nextSlice("build done\r\n1\r\n2\r\n3\r\n4\r\n5\r\n" ++
+            "\x1b]133;A;redraw=last\x07");
+
+        // Readline can have the rest of its redraw in flight when the
+        // terminal is resized after receiving the first prompt cells.
+        stream.nextSlice("\r\x1b[K\r" ++ prompt_start ++ prompt_prefix);
+        try t.resize(alloc, .{ .cols = case.cols, .rows = case.rows });
+        stream.nextSlice(prompt_suffix);
+
+        const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings(output ++ "host\xee\x82\xb0~/src/project (main) >", contents);
+    }
 }
 
 test "Terminal: logical line editing clears a wrapped prompt below the cursor" {

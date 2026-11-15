@@ -1318,8 +1318,8 @@ pub const Resize = struct {
         pub const Extent = enum {
             /// Only the row of `start`.
             row,
-            /// The logical line beginning at `start`, including soft wraps.
-            logical_line,
+            /// The marked prompt line, including wraps and implicit continuations.
+            prompt_line,
 
             /// The row of `start` and every row below it.
             to_bottom,
@@ -1569,6 +1569,9 @@ fn resizeCols(
         var blanking = false;
 
         while (it.next()) |row| {
+            if (blanking and opts.blank.?.extent == .prompt_line and
+                !row.rowAndCell().row.continuesPromptLine()) blanking = false;
+
             if (blank_start) |p| {
                 if (p.node == row.node and p.y == row.y) {
                     blanking = true;
@@ -1577,12 +1580,10 @@ fn resizeCols(
             }
 
             if (blanking) {
-                const wraps = row.rowAndCell().row.wrap;
                 try reflow_cursor.reflowBlankRow(self, row);
                 switch (opts.blank.?.extent) {
                     .row => blanking = false,
-                    .logical_line => blanking = wraps,
-                    .to_bottom => {},
+                    .prompt_line, .to_bottom => {},
                 }
             } else try reflow_cursor.reflowRow(
                 self,
@@ -2980,6 +2981,7 @@ const ReflowCursor = struct {
 
     fn copyRowMetadata(self: *ReflowCursor, other: *const Row) void {
         self.page_row.semantic_prompt = other.semantic_prompt;
+        self.page_row.prompt_redraw_continuation = other.prompt_redraw_continuation;
     }
 };
 

@@ -18,6 +18,8 @@ Changes on Ttyrex’s `main` branch since it forked from Ghostty at `6d9577708`.
   clears stale wrapped prompt text so the shell can redraw cleanly. (`7704e2977`)
 - Writable scrollback and logical-line editing are enabled by default.
   (`25a8d3375`, `7704e2977`)
+- Fixed window resizing erasing the start of a Bash prompt while the shell
+  was still drawing it or leaving fragments after a redraw at very narrow widths.
 
 ### macOS interface and defaults
 

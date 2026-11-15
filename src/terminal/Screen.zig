@@ -2213,6 +2213,15 @@ pub inline fn resize(
     const prompt_pin: ?*Pin = prompt: {
         const start = self.promptRedrawStart(opts.prompt_redraw) orelse
             break :prompt null;
+
+        // Preserve a Bash prompt that is still being drawn so reflow moves
+        // the received text with the cursor. On width changes, reserve
+        // the old rows of explicit continuation lines for the shell redraw.
+        if (opts.prompt_redraw == .last and self.cursor.semantic_content == .prompt and
+            (opts.cols == self.pages.cols or start.rowAndCell().row.semantic_prompt == .prompt))
+        {
+            break :prompt null;
+        }
         try tw.check(.prompt_pin);
         break :prompt try self.pages.trackPin(start);
     };
@@ -2289,7 +2298,7 @@ pub inline fn resize(
             .start = p,
             .extent = switch (opts.prompt_redraw) {
                 .false => unreachable,
-                .last => .logical_line,
+                .last => .prompt_line,
                 .true => .to_bottom,
             },
         } else null,
@@ -2456,7 +2465,7 @@ fn promptRedrawStart(
 
         .last => start: {
             var p = self.cursor.page_pin.left(self.cursor.x);
-            while (p.rowAndCell().row.wrap_continuation) p = p.up(1) orelse break;
+            while (p.rowAndCell().row.continuesPromptLine()) p = p.up(1) orelse break;
             break :start p;
         },
         .true => start: {
@@ -2474,7 +2483,7 @@ fn promptRedrawStart(
 
 /// Clear the prompt that starts at `start`, as returned by
 /// promptRedrawStart, so the shell can redraw it. With `.last`, this
-/// clears the row of `start` and its soft-wrapped continuations.
+/// clears the row of `start` and its continuations within the same prompt line.
 /// With `.true`, it clears that row and every row below it.
 fn clearPromptForRedraw(
     self: *Screen,
@@ -2488,14 +2497,9 @@ fn clearPromptForRedraw(
     while (it.next()) |pin| {
         const page = pin.node.page();
         const row = pin.rowAndCell().row;
+        if (redraw == .last and !pin.eql(start) and !row.continuesPromptLine()) break;
         const cells = page.getCells(row);
         self.clearCells(page, row, cells);
-
-        switch (redraw) {
-            .false => unreachable,
-            .last => if (!row.wrap) break,
-            .true => {},
-        }
     }
 }
 
@@ -3037,6 +3041,7 @@ pub fn cursorSetSemanticContent(self: *Screen, t: union(enum) {
             self.semantic_prompt.seen = true;
             cursor.semantic_content = .prompt;
             cursor.semantic_content_clear_eol = false;
+            cursor.page_row.prompt_redraw_continuation = false;
             cursor.page_row.semantic_prompt = switch (kind) {
                 .initial, .right => .prompt,
                 .continuation, .secondary => .prompt_continuation,

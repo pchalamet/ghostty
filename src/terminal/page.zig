@@ -2337,7 +2337,16 @@ pub const Row = packed struct(u64) {
     /// `PageList.trimTrailingBlankRows` don't read them.
     blank: bool = false,
 
-    _padding: u22 = 0,
+    /// A hard line break printed inside the same marked shell prompt.
+    /// An explicit OSC 133 prompt marker starts a separate prompt line.
+    prompt_redraw_continuation: bool = false,
+
+    _padding: u21 = 0,
+
+    pub fn continuesPromptLine(self: Row) bool {
+        return self.wrap_continuation or
+            (self.semantic_prompt == .prompt_continuation and self.prompt_redraw_continuation);
+    }
 
     /// The semantic prompt state of the row. See `semantic_prompt`.
     pub const SemanticPrompt = enum(u2) {
