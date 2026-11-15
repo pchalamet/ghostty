@@ -2924,10 +2924,11 @@ pub fn semanticPrompt(
         .fresh_line => try self.semanticPromptFreshLine(),
 
         .fresh_line_new_prompt => {
+            const screen: *Screen = self.screens.active;
+            screen.clearPromptRedrawRows();
+
             // "First do a fresh-line."
             try self.semanticPromptFreshLine();
-
-            const screen: *Screen = self.screens.active;
 
             // "Subsequent text (until a OSC "133;B" or OSC "133;I" command)
             // is a prompt string (as if followed by OSC 133;P;k=i\007)."
@@ -2986,9 +2987,10 @@ pub fn semanticPrompt(
             // The k (kind) option specifies the type of prompt:
             // regular primary prompt (k=i or default),
             // right-side prompts (k=r), or prompts for continuation lines (k=c or k=s).
-            self.screens.active.cursorSetSemanticContent(.{
-                .prompt = cmd.readOption(.prompt_kind) orelse .initial,
-            });
+            const kind = cmd.readOption(.prompt_kind) orelse .initial;
+            const screen = self.screens.active;
+            if (kind == .initial) screen.resumePromptRedraw();
+            screen.cursorSetSemanticContent(.{ .prompt = kind });
         },
 
         .end_prompt_start_input => {
@@ -4691,6 +4693,7 @@ pub fn eraseDisplay(
 
     switch (mode) {
         .scroll_complete => {
+            self.screens.active.clearPromptRedrawRows();
             self.screens.active.scrollClear() catch |err| {
                 log.warn("scroll clear failed, doing a normal clear err={}", .{err});
                 self.eraseDisplay(.complete, protected_req);
@@ -4765,6 +4768,7 @@ pub fn eraseDisplay(
                 null,
                 protected,
             );
+            if (!protected) self.screens.active.extendPromptRedrawAfterClear();
 
             // Unsets pending wrap state
             self.screens.active.cursor.pending_wrap = false;
@@ -19236,18 +19240,45 @@ test "Terminal: rapid resizing does not leave Bash prompt fragments" {
     try t.resize(alloc, .{ .cols = 150, .rows = 40 });
     stream.nextSlice("\r\x1b[K\r" ++ draw);
 
+    {
+        const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings("BUILD-DONE\n" ++ prompt, contents);
+    }
+
     // An empty command advances to a new prompt.
     stream.nextSlice("\r\n\x1b]133;D;0\x07" ++ new_prompt ++ draw);
     const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
     defer alloc.free(contents);
-    var lines = std.mem.splitScalar(u8, contents, '\n');
-    var nonempty: usize = 0;
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        try testing.expectEqualStrings(if (nonempty == 0) "BUILD-DONE" else prompt, line);
-        nonempty += 1;
-    }
-    try testing.expectEqual(3, nonempty);
+    try testing.expectEqualStrings("BUILD-DONE\n" ++ prompt ++ "\n" ++ prompt, contents);
+}
+
+test "Terminal: a Bash resize redraw removes leftover blank rows from history" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 40, .rows = 2 });
+    defer t.deinit(alloc);
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    const prompt_begin = "\x1b]133;P;k=i\x07";
+    const prompt_end = "\x1b]133;B\x07";
+    const prompt = " PROMPT-unique ~/src/project/path/very-long-prompt >";
+    stream.nextSlice("BUILD-DONE\r\n\r\n\x1b]133;A;redraw=last\x07" ++
+        prompt_begin ++ prompt ++ prompt_end);
+    try t.resize(alloc, .{ .cols = 3, .rows = 35 });
+    stream.nextSlice("\r\x1b[K\r\x1b[A\x1b[K\r" ++
+        prompt_begin ++ prompt[0..3] ++ "\r\n\r" ++ prompt[3..] ++ prompt_end);
+
+    try t.resize(alloc, .{ .cols = 2, .rows = 15 });
+    stream.nextSlice("\r\x1b[K\r\x1b[H\x1b[2J" ++
+        prompt_begin ++ prompt[0..2] ++ "\r\n\r" ++ prompt[2..] ++ prompt_end);
+    try t.resize(alloc, .{ .cols = 150, .rows = 40 });
+    stream.nextSlice("\r\x1b[K\r" ++ prompt_begin ++ prompt ++ prompt_end);
+
+    // Keep the blank line emitted by the command, before the prompt.
+    const contents = try t.screens.active.dumpStringAllocUnwrapped(alloc, .{ .screen = .{} });
+    defer alloc.free(contents);
+    try testing.expectEqualStrings("BUILD-DONE\n\n" ++ prompt, contents);
 }
 
 test "Terminal: resizing preserves a Bash prompt during redraw" {

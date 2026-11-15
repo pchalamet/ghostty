@@ -87,6 +87,9 @@ else
 /// Semantic prompt (OSC133) state.
 semantic_prompt: SemanticPrompt = .disabled,
 
+/// Rows temporarily cleared for the shell to redraw its last prompt line.
+prompt_redraw_rows: ?struct { start: *Pin, end: *Pin } = null,
+
 /// Dirty flags for the renderer.
 dirty: Dirty = .{},
 
@@ -501,6 +504,7 @@ pub fn reset(self: *Screen) void {
     self.kitty_keyboard = .{};
     self.protected_mode = .off;
     self.semantic_prompt = .disabled;
+    self.clearPromptRedrawRows();
     self.clearSelection();
 }
 
@@ -2225,7 +2229,18 @@ pub inline fn resize(
         try tw.check(.prompt_pin);
         break :prompt try self.pages.trackPin(start);
     };
-    defer if (prompt_pin) |p| self.pages.untrackPin(p);
+    var keep_prompt_pin = false;
+    defer if (!keep_prompt_pin) {
+        if (prompt_pin) |p| self.pages.untrackPin(p);
+    };
+
+    const redraw_end: ?*Pin = end: {
+        const start = prompt_pin orelse break :end null;
+        if (opts.prompt_redraw != .last or start.rowAndCell().row.semantic_prompt != .prompt) break :end null;
+        const cursor = self.cursor.page_pin.left(self.cursor.x);
+        break :end try self.pages.trackPin(cursor);
+    };
+    errdefer if (redraw_end) |p| self.pages.untrackPin(p);
 
     // A cursor style and hyperlink are partly stored in the page containing
     // the cursor. Their IDs only have meaning within that page, and the page
@@ -2339,6 +2354,12 @@ pub inline fn resize(
     // default style. A column reflow already wrote these rows blank, so
     // this matters most when only the row count changed.
     if (prompt_pin) |p| self.clearPromptForRedraw(p.*, opts.prompt_redraw);
+
+    if (redraw_end) |end| {
+        self.clearPromptRedrawRows();
+        self.prompt_redraw_rows = .{ .start = prompt_pin.?, .end = end };
+        keep_prompt_pin = true;
+    }
 
     // Restore the cursor style.
     self.cursor.style = cursor_style;
@@ -2501,6 +2522,58 @@ fn clearPromptForRedraw(
         const cells = page.getCells(row);
         self.clearCells(page, row, cells);
     }
+}
+
+pub fn clearPromptRedrawRows(self: *Screen) void {
+    const rows = self.prompt_redraw_rows orelse return;
+    self.pages.untrackPin(rows.start);
+    self.pages.untrackPin(rows.end);
+    self.prompt_redraw_rows = null;
+}
+
+/// Readline can fall back to clearing the viewport if the grid becomes
+/// too small. This can move the cursor beyond the prompt's old rows.
+pub fn extendPromptRedrawAfterClear(self: *Screen) void {
+    const rows = self.prompt_redraw_rows orelse return;
+    if (self.cursor.in_scrollback or self.cursor.x != 0 or self.cursor.y != 0) return;
+    const cursor = self.cursor.page_pin.*;
+    if (!rows.end.garbage and rows.end.before(cursor)) rows.end.* = cursor;
+}
+
+/// Once the shell starts printing the prompt again, reuse its cleared
+/// rows if the shell moved up fewer rows than the resize reserved.
+pub fn resumePromptRedraw(self: *Screen) void {
+    const rows = self.prompt_redraw_rows orelse return;
+    defer self.clearPromptRedrawRows();
+
+    if (self.cursor.in_scrollback or self.cursor.x != 0 or rows.start.garbage or rows.end.garbage) return;
+    const current = self.cursor.page_pin.*;
+    if (!rows.start.before(current) or rows.end.before(current)) return;
+    var it = rows.start.rowIterator(.right_down, current);
+    var count: usize = 0;
+    while (it.next()) |p| {
+        if (!p.rowAndCell().row.blank and !pagepkg.Cell.isEmptyAll(p.cells(.all))) return;
+        count += 1;
+    }
+
+    if (self.pages.pointFromPin(.active, rows.start.*) != null) {
+        self.cursorToPin(rows.start.*);
+    } else {
+        // If the blank rows reached history, keep the prompt in the
+        // viewport by removing the gap above the shell's new cursor.
+        const previous = rows.start.up(1) orelse return;
+        const old_node = self.cursor.page_pin.node;
+        for (0..count - 1) |_| {
+            self.pages.removeRowAfter(previous) catch |err| {
+                log.warn("could not remove cleared prompt row: {}", .{err});
+                break;
+            };
+        }
+        self.cursorReloadAfterPrune(old_node);
+        self.scrollback_revision +%= 1;
+        if (comptime build_options.kitty_graphics) self.kitty_images.markDirty();
+    }
+    self.cursor.pending_wrap = false;
 }
 
 /// Set a style attribute for the current cursor.
@@ -3022,6 +3095,7 @@ pub fn cursorSetSemanticContent(self: *Screen, t: union(enum) {
 
     switch (t) {
         .output => {
+            self.clearPromptRedrawRows();
             cursor.semantic_content = .output;
             cursor.semantic_content_clear_eol = false;
         },

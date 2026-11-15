@@ -20,6 +20,8 @@ Changes on Ttyrex’s `main` branch since it forked from Ghostty at `6d9577708`.
   (`25a8d3375`, `7704e2977`)
 - Fixed window resizing erasing the start of a Bash prompt while the shell
   was still drawing it or leaving fragments after a redraw at very narrow widths.
+- Fixed rapid window resizing leaving extra blank rows above the Bash prompt
+  after a command completes.
 
 ### macOS interface and defaults
 
