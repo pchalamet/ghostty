@@ -155,10 +155,6 @@ pub const Cursor = struct {
     y: size.CellCountInt = 0,
     in_scrollback: bool = false,
 
-    /// The current line was erased for replacement. Its wrapped text can
-    /// grow without overwriting the following logical line.
-    replacing_line: bool = false,
-
     /// The visual style of the cursor. This defaults to block because
     /// it has to default to something, but users of this struct are
     /// encouraged to set their own default.
@@ -970,23 +966,6 @@ pub fn cursorToPin(self: *Screen, pin: Pin) void {
     self.cursor.page_cell = rac.cell;
 }
 
-/// Keep a replacement's continuation ahead of the next logical line.
-pub fn insertContinuation(self: *Screen) !void {
-    const old_node = self.cursor.page_pin.node;
-    try self.pages.insertRowAfter(self.cursor.page_pin.*);
-    const evicted = self.cursor.page_pin.garbage;
-    // Inserting can move the active boundary across the original row.
-    self.cursor.in_scrollback = true;
-    self.cursorReloadAfterPrune(old_node);
-    self.scrollback_revision +%= 1;
-    if (comptime build_options.kitty_graphics) self.kitty_images.markDirty();
-    if (evicted) {
-        self.cursor.replacing_line = false;
-        return error.CursorEvicted;
-    }
-    self.cursorToPin(self.cursor.page_pin.down(1).?);
-}
-
 /// Reloads the cursor pointer information into the screen. This is expensive
 /// so it should only be done in cases where the pointers are invalidated
 /// in such a way that its difficult to recover otherwise.
@@ -1581,7 +1560,6 @@ pub fn cursorCopy(self: *Screen, other: Cursor, opts: struct {
     self.cursor.x = old.x;
     self.cursor.y = old.y;
     self.cursor.in_scrollback = old.in_scrollback;
-    self.cursor.replacing_line = false;
 
     // Call manual style update in order to clean up our old style, if we have
     // one, and also to load the style from the other cursor, if it had one.
@@ -2334,7 +2312,6 @@ pub inline fn resize(
     // If our cursor was updated, we do a full reload so all our cursor
     // state is correct.
     if (!self.no_scrollback) self.cursor.in_scrollback = true;
-    if (self.no_scrollback) self.cursor.replacing_line = false;
     self.cursorReload();
 
     // Erasing history marks a cursor pin in the erased rows as garbage, but

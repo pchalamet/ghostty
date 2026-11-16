@@ -10,14 +10,16 @@ Changes on Ttyrex’s `main` branch since it forked from Ghostty at `6d9577708`.
   edit earlier output. The viewport can scroll independently. Saved cursor
   positions are tracked through reflow and history eviction, and scrollback
   changes refresh search results. (`25a8d3375`)
-- With full-screen scroll margins, primary-screen output is edited by logical
-  line. Relative cursor moves and line erases account for soft wraps.
-  Replacement text can add or remove continuation rows while preserving
-  neighboring output. This fixes progress display redraws after a resize. (`7704e2977`)
+- Cursor movement and erasing use screen rows, including soft-wrapped rows,
+  in both the active screen and writable scrollback. Replacing erased text
+  overwrites existing rows rather than inserting or removing continuations.
+  This fixes .NET live build output erasing earlier warnings and leaving a
+  trailing blank area.
+- Output retains logical lines for reflow, selection, and search. Applications
+  are responsible for recalculating their redraws after a resize.
 - Shell prompts and input marked by shell integration use screen rows. Resizing
   clears stale wrapped prompt text so the shell can redraw cleanly. (`7704e2977`)
-- Writable scrollback and logical-line editing are enabled by default.
-  (`25a8d3375`, `7704e2977`)
+- Writable scrollback is enabled by default. (`25a8d3375`)
 - Fixed window resizing erasing the start of a Bash prompt while the shell
   was still drawing it or leaving fragments after a redraw at very narrow widths.
 - Fixed rapid window resizing leaving extra blank rows above the Bash prompt
